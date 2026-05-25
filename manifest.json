@@ -1,0 +1,9 @@
+{
+  "short_name": "Paving Suite",
+  "name": "Paving Mauritius Business Suite",
+  "start_url": ".",
+  "display": "standalone",
+  "theme_color": "#1B4F8A",
+  "background_color": "#F0F4FA",
+  "icons": []
+}
