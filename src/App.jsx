@@ -1,6 +1,7 @@
 import { useState, useRef } from "react";
 
 const LOGO_URL = "https://raw.githubusercontent.com/iswarrenvalaydon/paving-mauritius-suite/main/paving-logo.png";
+
 const BLUE = "#1B4F8A";
 const LIGHT_BLUE = "#E8EFF8";
 const GREEN = "#1A7A3C";
@@ -222,7 +223,7 @@ export default function App(){
     const W=595,H=842,BL=BLUE,LB=LIGHT_BLUE,GR=GREEN,LG=LIGHT_GREEN;
     let s="";
     s+=`<rect x="0" y="0" width="${W}" height="115" fill="${BL}"/>`;
-    s+=`<image href="data:image/jpeg;base64,${LOGO_B64}" x="${(W-110)/2}" y="8" width="110" height="80" preserveAspectRatio="xMidYMid meet"/>`;
+    s+=`<image href="https://raw.githubusercontent.com/iswarrenvalaydon/paving-mauritius-suite/main/paving-logo.png" x="${(W-110)/2}" y="8" width="110" height="80" preserveAspectRatio="xMidYMid meet"/>`;
     s+=`<text x="${W-18}" y="55" font-family="Arial" font-size="17" font-weight="bold" fill="white" text-anchor="end">${docType.toUpperCase()}</text>`;
     s+=`<text x="${W-18}" y="74" font-family="Arial" font-size="9" fill="#AACCEE" text-anchor="end">Ref: ${ref}     Date: ${fmtDate(date)}</text>`;
 
@@ -362,7 +363,7 @@ export default function App(){
 
       {/* Header */}
       <div style={{background:BLUE,color:"#fff",padding:"0 24px",display:"flex",alignItems:"center",gap:16,height:58,boxShadow:"0 2px 8px #0002"}}>
-        <img src={`data:image/jpeg;base64,${LOGO_B64}`} alt="logo" style={{height:42,objectFit:"contain"}}/>
+        <img src={LOGO_URL} alt="logo" style={{height:42,objectFit:"contain"}}/>
         <div>
           <div style={{fontWeight:700,fontSize:17,letterSpacing:0.5}}>Paving Mauritius – Business Suite</div>
           <div style={{fontSize:11,opacity:0.75}}>Invoice · Quotation · Delivery Note · Statement of Account</div>
