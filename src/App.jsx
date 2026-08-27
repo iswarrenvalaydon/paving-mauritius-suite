@@ -1,4 +1,5 @@
-import { useState, useRef } from "react";
+import { useState, useRef, useEffect } from "react";
+import { supabase } from "./supabaseClient";
 
 const LOGO_URL = "https://raw.githubusercontent.com/iswarrenvalaydon/paving-mauritius-suite/main/paving-logo.png";
 
@@ -9,8 +10,9 @@ const LIGHT_GREEN = "#E8F5ED";
 const DARK_GREY = "#333333";
 const MID_GREY = "#666666";
 
+const COMMERCIAL_NAME = "Paving Mauritius Ltd"; // used in client-facing emails/WhatsApp
 const SUPPLIER = {
-  name: "Paving Suppliers Mauritius Ltd",
+  name: "Paving Suppliers Mauritius Ltd", // official legal name, used on documents
   address: "138 New Industrial Zone",
   city: "La Tour Koenig",
   area: "Pointe aux Sable",
@@ -52,10 +54,58 @@ export default function App(){
   const [clientAnalysis,setClientAnalysis]=useState(null);
   const [analysing,setAnalysing]=useState(false);
   const [priceSearch,setPriceSearch]=useState("");
+  const [includeBank,setIncludeBank]=useState(true); // quotation: with/without bank details
+  const [clientType,setClientType]=useState("first-time"); // "first-time" | "returning"
+  const [msgLang,setMsgLang]=useState("en"); // "en" | "fr"
+  const [dbReady,setDbReady]=useState(false);
+  const [refLoading,setRefLoading]=useState(false);
 
   const scanRef=useRef();
   const priceRef=useRef();
   const analysisRef=useRef();
+
+  // ── Load saved clients & price list from Supabase on startup ──
+  useEffect(()=>{
+    (async()=>{
+      try{
+        const [{data:clientsData,error:cErr},{data:productsData,error:pErr}]=await Promise.all([
+          supabase.from("clients").select("*").order("name"),
+          supabase.from("products").select("*").order("description"),
+        ]);
+        if(!cErr&&clientsData){
+          setSavedClients(clientsData.map(c=>({
+            name:c.name,contact:c.contact||"",address:c.address||"",city:c.city||"",
+            area:c.area||"",brn:c.brn||"",vat:c.vat||"",email:c.email||"",
+            client_type:c.client_type||"first-time",
+          })));
+        }
+        if(!pErr&&productsData&&productsData.length){
+          setPriceList(productsData.map(p=>({code:p.code||"",desc:p.description,price:Number(p.price)||0})));
+          setPriceListName("Shared price list (from database)");
+        }
+        setDbReady(true);
+      }catch{
+        notify("⚠️ Could not connect to database — check your internet connection","error");
+        setDbReady(true);
+      }
+    })();
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  },[]);
+
+  // ── Pull the next shared reference number whenever the document type changes ──
+  useEffect(()=>{
+    (async()=>{
+      setRefLoading(true);
+      try{
+        const {data,error}=await supabase.rpc("peek_next_ref",{p_doc_type:docType});
+        if(!error&&data!=null){
+          setRefNum(String(data).padStart(3,"0"));
+        }
+      }catch{ /* keep whatever refNum was already there */ }
+      setRefLoading(false);
+    })();
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  },[docType]);
 
   // ── Notify helper ──────────────────────────────
   function notify(msg,type="success"){
@@ -76,7 +126,8 @@ export default function App(){
       const rows=XLSX.utils.sheet_to_json(ws,{header:1});
       const parsed=rows.slice(1).map(r=>({code:String(r[0]||"").trim(),desc:String(r[1]||"").trim(),price:parseFloat(r[2])||0})).filter(r=>r.desc);
       setPriceList(parsed);
-      notify(`✅ Loaded ${parsed.length} products from ${file.name}`);
+      await saveProductsToDb(parsed);
+      notify(`✅ Loaded ${parsed.length} products from ${file.name} — synced for both users`);
     } else if(ext==="pdf"){
       const reader=new FileReader();
       reader.onload=async()=>{
@@ -87,10 +138,25 @@ export default function App(){
           const text=data.content.map(i=>i.text||"").join("");
           const parsed=JSON.parse(text.replace(/```json|```/g,"").trim());
           setPriceList(parsed);
-          notify(`✅ Loaded ${parsed.length} products from PDF`);
+          await saveProductsToDb(parsed);
+          notify(`✅ Loaded ${parsed.length} products from PDF — synced for both users`);
         }catch{ notify("❌ Could not read PDF price list","error"); }
       };
       reader.readAsDataURL(file);
+    }
+  }
+
+  // Replaces the shared product list in the database with the newly uploaded one
+  async function saveProductsToDb(parsed){
+    try{
+      await supabase.from("products").delete().neq("id",0); // clear old list
+      if(parsed.length){
+        const rows=parsed.map(p=>({code:p.code,description:p.desc,price:p.price}));
+        const{error}=await supabase.from("products").insert(rows);
+        if(error)throw error;
+      }
+    }catch{
+      notify("⚠️ Price list saved on this device only (database error)","error");
     }
   }
 
@@ -127,14 +193,30 @@ export default function App(){
   }
 
   // ── Save/load client ───────────────────────────
-  function saveClient(){
+  async function saveClient(){
     if(!client.name){ notify("Enter client name first","error"); return; }
     const existing=savedClients.findIndex(c=>c.name===client.name);
-    if(existing>=0){ const updated=[...savedClients]; updated[existing]=client; setSavedClients(updated); }
-    else setSavedClients([...savedClients,client]);
-    notify(`✅ ${client.name} saved!`);
+    const record={...client};
+    if(existing>=0){ const updated=[...savedClients]; updated[existing]=record; setSavedClients(updated); }
+    else setSavedClients([...savedClients,record]);
+    try{
+      const{error}=await supabase.from("clients").upsert(
+        {name:client.name,contact:client.contact,address:client.address,city:client.city,
+         area:client.area,brn:client.brn,vat:client.vat,email:client.email,
+         client_type:client.client_type||clientType,updated_at:new Date().toISOString()},
+        {onConflict:"name"}
+      );
+      if(error)throw error;
+      notify(`✅ ${client.name} saved — visible to both users`);
+    }catch{
+      notify(`⚠️ ${client.name} saved on this device only (database error)`,"error");
+    }
   }
-  function loadClient(c){ setClient(c); setToName(c.contact||c.name); setShowClientList(false); notify(`✅ Loaded: ${c.name}`); }
+  function loadClient(c){
+    setClient(c); setToName(c.contact||c.name); setShowClientList(false);
+    setClientType(c.client_type||"returning");
+    notify(`✅ Loaded: ${c.name}`);
+  }
 
   // ── Calculations ───────────────────────────────
   const calcItems=items.map(it=>({...it,total:(parseFloat(it.qty)||0)*(parseFloat(it.unitPrice)||0)}));
@@ -155,95 +237,48 @@ export default function App(){
   // ── Generate Email (template-based) ──────────────────────────
   function generateEmail(){
     setGeneratingMsg(true); setEmailDraft(null); setWhatsappDraft(null);
-    const clientName = toName||client.name||"Valued Client";
-    const itemsList = calcItems.filter(i=>i.desc).map(i=>`- ${i.desc} x${i.qty} @ Rs ${fmt(i.unitPrice)} = Rs ${fmt(i.total)}`).join("\n");
-    const totalAmt = isSOA ? soaTTC : total;
-    const subject = `${docType} – ${ref} – Paving Suppliers Mauritius Ltd`;
+    const clientName = toName||client.name||(msgLang==="fr"?"Client":"Valued Client");
+    const isReturning = clientType==="returning";
+    const subject = msgLang==="fr"
+      ? `Votre ${docType==="Quotation"?"devis":docType==="Invoice"?"facture":docType} – ${ref} – ${COMMERCIAL_NAME}`
+      : `Your ${docType} from ${COMMERCIAL_NAME} – ${ref}`;
 
-    let body = "";
+    const openings = {
+      en:{ first:`Thank you for considering ${COMMERCIAL_NAME} for your project.`, returning:`Thank you for continuing to trust ${COMMERCIAL_NAME}.` },
+      fr:{ first:`Merci d'avoir choisi ${COMMERCIAL_NAME} pour votre projet.`, returning:`Merci de votre fidélité envers ${COMMERCIAL_NAME}.` },
+    };
+    const opening = openings[msgLang][isReturning?"returning":"first"];
 
-    if(docType === "Quotation"){
-      body = `Dear ${clientName},
+    const docLabel = { en:{Quotation:"quotation",Invoice:"invoice","Delivery Note":"delivery note","Statement of Account":"statement of account"},
+                       fr:{Quotation:"devis",Invoice:"facture","Delivery Note":"bon de livraison","Statement of Account":"relevé de compte"} }[msgLang][docType];
 
-Thank you for your interest in Paving Suppliers Mauritius Ltd.
+    const closings = {
+      en:{ first:"We'd be delighted to assist further — feel free to reach out with any questions.", returning:"It's always a pleasure working with you." },
+      fr:{ first:"N'hésitez pas à nous contacter pour toute question.", returning:"C'est toujours un plaisir de travailler avec vous." },
+    };
+    const closing = closings[msgLang][isReturning?"returning":"first"];
 
-Please find attached our quotation ${ref} dated ${fmtDate(date)} for your kind consideration.
+    const salutation = msgLang==="fr" ? `Bonjour ${clientName},` : `Dear ${clientName},`;
+    const attachLine = msgLang==="fr"
+      ? `Veuillez trouver ci-joint votre ${docLabel} (${ref}).`
+      : `Please find your ${docLabel} (${ref}) attached.`;
+    const signoff = msgLang==="fr" ? "Cordialement," : "Warm regards,";
 
-${itemsList}
+    const showBank = docType==="Delivery Note" ? false : docType==="Quotation" ? includeBank : true;
+    const bankLine = !showBank ? "" :
+      (msgLang==="fr" ? `\nCoordonnées bancaires : ${SUPPLIER.bank}\n` : `\nBank details: ${SUPPLIER.bank}\n`);
 
-Subtotal: Rs ${fmt(subtotal)}
-VAT (15%): Rs ${fmt(vat)}
-Total: Rs ${fmt(total)}
+    const body = `${salutation}
 
-Please note that this quotation is valid for 2 months, subject to stock availability. All wooden pallets must be returned in good condition.
+${opening}
 
-For any queries, please do not hesitate to contact us.
+${attachLine}
+${bankLine}
+${closing}
 
-Bank Details:
-${SUPPLIER.name}
-${SUPPLIER.bank}
-
-Warm regards,
+${signoff}
 ${SUPPLIER.contact}
-${SUPPLIER.email}
-Paving Suppliers Mauritius Ltd`;
-    } else if(docType === "Invoice"){
-      body = `Dear ${clientName},
-
-Please find attached our invoice ${ref} dated ${fmtDate(date)}.
-
-${itemsList}
-
-Subtotal: Rs ${fmt(subtotal)}
-VAT (15%): Rs ${fmt(vat)}
-Total: Rs ${fmt(total)}
-
-Kindly arrange payment at your earliest convenience.
-
-Bank Details:
-${SUPPLIER.name}
-${SUPPLIER.bank}
-
-Thank you for your business.
-
-Warm regards,
-${SUPPLIER.contact}
-${SUPPLIER.email}
-Paving Suppliers Mauritius Ltd`;
-    } else if(docType === "Delivery Note"){
-      body = `Dear ${clientName},
-
-Please find attached the delivery note ${ref} dated ${fmtDate(date)} for your records.
-
-${itemsList}
-
-Kindly confirm receipt of the goods.
-
-For any queries, please contact us.
-
-Warm regards,
-${SUPPLIER.contact}
-${SUPPLIER.email}
-Paving Suppliers Mauritius Ltd`;
-    } else if(docType === "Statement of Account"){
-      body = `Dear ${clientName},
-
-Please find attached your Statement of Account ${ref} dated ${fmtDate(date)}.
-
-Total Amount: Rs ${fmt(soaTTC)}
-Status: ${soaData.paid ? "✅ Fully Paid — Thank you!" : "⏳ Balance Due"}
-
-${soaData.paid ? "We thank you for your prompt payment and look forward to continuing our business relationship." : "Kindly arrange payment at your earliest convenience."}
-
-Bank Details:
-${SUPPLIER.name}
-${SUPPLIER.bank}
-
-Warm regards,
-${SUPPLIER.contact}
-${SUPPLIER.email}
-Paving Suppliers Mauritius Ltd`;
-    }
+${COMMERCIAL_NAME}`;
 
     setEmailDraft({subject, body});
     setGeneratingMsg(false);
@@ -254,47 +289,29 @@ Paving Suppliers Mauritius Ltd`;
   function generateWhatsApp(){
     setGeneratingMsg(true); setWhatsappDraft(null); setEmailDraft(null);
     const clientName = toName||client.name||"";
-    let msg = "";
+    const isReturning = clientType==="returning";
+    const docLabel = { en:{Quotation:"quotation",Invoice:"invoice","Delivery Note":"delivery note","Statement of Account":"statement of account"},
+                       fr:{Quotation:"devis",Invoice:"facture","Delivery Note":"bon de livraison","Statement of Account":"relevé de compte"} }[msgLang][docType];
+    const showBank = docType==="Delivery Note" ? false : docType==="Quotation" ? includeBank : true;
 
-    if(docType === "Quotation"){
-      msg = `Bonjour ${clientName} 👋
+    const greetings = {
+      en:{ first:`Hello ${clientName}, thank you for reaching out to ${COMMERCIAL_NAME}!`, returning:`Hi ${clientName}, great to hear from you again!` },
+      fr:{ first:`Bonjour ${clientName}, merci de nous avoir contactés chez ${COMMERCIAL_NAME} !`, returning:`Bonjour ${clientName}, toujours un plaisir de vous retrouver !` },
+    };
+    const closings = {
+      en:{ first:"We're happy to help bring your project to life — let us know if you have any questions. 😊", returning:"Always a pleasure working with you — let us know if you need anything else." },
+      fr:{ first:"N'hésitez pas à nous contacter pour toute question. 😊", returning:"N'hésitez pas si vous avez besoin d'autre chose." },
+    };
 
-Merci pour votre intérêt. Veuillez trouver ci-joint notre devis ${ref} daté du ${fmtDate(date)}.
+    const greeting = greetings[msgLang][isReturning?"returning":"first"];
+    const closing = closings[msgLang][isReturning?"returning":"first"];
+    const attachLine = msgLang==="fr" ? `Voici votre ${docLabel} (${ref}).` : `Here's your ${docLabel} (${ref}).`;
+    const bankLine = showBank ? (msgLang==="fr" ? `🏦 ${SUPPLIER.bank}\n` : `🏦 ${SUPPLIER.bank}\n`) : "";
 
-Montant Total: Rs ${fmt(total)} (TVA 15% incluse)
+    const msg = `${greeting}
 
-Ce devis est valable 2 mois. N'hésitez pas à nous contacter pour toute question.
-
-📞 ${SUPPLIER.contact}`;
-    } else if(docType === "Invoice"){
-      msg = `Bonjour ${clientName} 👋
-
-Veuillez trouver ci-joint votre facture ${ref} daté du ${fmtDate(date)}.
-
-Montant Total: Rs ${fmt(total)} (TVA 15% incluse)
-
-Merci de bien vouloir effectuer le paiement dans les meilleurs délais.
-
-🏦 ${SUPPLIER.bank}
-📞 ${SUPPLIER.contact}`;
-    } else if(docType === "Delivery Note"){
-      msg = `Bonjour ${clientName} 👋
-
-Veuillez trouver ci-joint votre bon de livraison ${ref} daté du ${fmtDate(date)}.
-
-Merci de confirmer la bonne réception des marchandises.
-
-📞 ${SUPPLIER.contact}`;
-    } else if(docType === "Statement of Account"){
-      msg = `Bonjour ${clientName} 👋
-
-Veuillez trouver ci-joint votre relevé de compte ${ref} daté du ${fmtDate(date)}.
-
-Montant Total: Rs ${fmt(soaTTC)}
-Statut: ${soaData.paid ? "✅ Entièrement payé — Merci!" : "⏳ Solde dû"}
-
-📞 ${SUPPLIER.contact}`;
-    }
+${attachLine}
+${bankLine}${closing}`;
 
     setWhatsappDraft(msg);
     setGeneratingMsg(false);
@@ -338,6 +355,30 @@ Statut: ${soaData.paid ? "✅ Entièrement payé — Merci!" : "⏳ Solde dû"}
 
   // ── PDF Download using jsPDF ───────────────────
   async function downloadDoc(){
+    // Consume the next shared serial number and record this document centrally,
+    // so both users always see the correct running numbers and full history.
+    let finalRefNum=refNum;
+    let docRef=`${docPrefix(docType)}/${refNum}`;
+    try{
+      const{data:nextNum,error:refErr}=await supabase.rpc("get_next_ref",{p_doc_type:docType});
+      if(!refErr&&nextNum!=null){
+        finalRefNum=String(nextNum).padStart(3,"0");
+        docRef=`${docPrefix(docType)}/${finalRefNum}`;
+        setRefNum(finalRefNum);
+      }
+      await supabase.from("documents").insert({
+        doc_type:docType,
+        ref:docRef,
+        doc_date:date,
+        client_name:client.name||toName||null,
+        client_snapshot:client,
+        items:isSOA?soaData:calcItems,
+        include_bank:includeBank,
+        total:isSOA?soaTTC:total,
+      });
+    }catch{
+      notify("⚠️ Document generated, but could not sync the reference number online","error");
+    }
     const {jsPDF} = await import("jspdf");
     const doc = new jsPDF({orientation:"portrait",unit:"mm",format:"a4"});
     const W=210, H=297;
@@ -366,7 +407,7 @@ Statut: ${soaData.paid ? "✅ Entièrement payé — Merci!" : "⏳ Solde dû"}
     doc.text(docType.toUpperCase(),W-8,18,{align:"right"});
     doc.setFontSize(8);doc.setFont("helvetica","normal");
     doc.setTextColor(170,204,238);
-    doc.text(`Ref: ${ref}     Date: ${fmtDate(date)}`,W-8,26,{align:"right"});
+    doc.text(`Ref: ${docRef}     Date: ${fmtDate(date)}`,W-8,26,{align:"right"});
 
     // Addresses
     let ay=46;
@@ -487,7 +528,9 @@ Statut: ${soaData.paid ? "✅ Entièrement payé — Merci!" : "⏳ Solde dû"}
       doc.setTextColor(...dg);doc.setFontSize(8);doc.setFont("helvetica","bold");
       doc.text("Terms & Conditions:",8,termsY);
       doc.setFont("helvetica","normal");doc.setTextColor(...mg);doc.setFontSize(7.5);
-      [`1. Contact: ${SUPPLIER.contact}`,"2. Valid for 2 months depending on stock availability","3. All wooden pallets must be returned in good condition",`4. Bank: ${SUPPLIER.name} – ${SUPPLIER.bank}`].forEach((t,i)=>{
+      [`1. Contact: ${SUPPLIER.contact}`,"2. Valid for 2 months depending on stock availability","3. All wooden pallets must be returned in good condition",
+        ...(includeBank?[`4. Bank: ${SUPPLIER.name} – ${SUPPLIER.bank}`]:[])
+      ].forEach((t,i)=>{
         doc.text(t,8,termsY+5+i*5);
       });
     }
@@ -497,7 +540,7 @@ Statut: ${soaData.paid ? "✅ Entièrement payé — Merci!" : "⏳ Solde dû"}
     doc.setTextColor(255,255,255);doc.setFontSize(7);doc.setFont("helvetica","normal");
     doc.text(`${SUPPLIER.name} | ${SUPPLIER.address}, ${SUPPLIER.city}, ${SUPPLIER.area} | ${SUPPLIER.brn} | ${SUPPLIER.email}`,W/2,H-5,{align:"center"});
 
-    doc.save(`${ref.replace(/\//g,"_")}.pdf`);
+    doc.save(`${docRef.replace(/\//g,"_")}.pdf`);
     notify(`✅ ${docType} downloaded as PDF!`);
   }
 
@@ -570,7 +613,9 @@ Statut: ${soaData.paid ? "✅ Entièrement payé — Merci!" : "⏳ Solde dû"}
             {card(<>
               <div style={{display:"flex",gap:16,flexWrap:"wrap"}}>
                 <div style={{flex:1,minWidth:200}}>
-                  <label style={{fontSize:12,color:MID_GREY,fontWeight:600,display:"block",marginBottom:4}}>Reference Number</label>
+                  <label style={{fontSize:12,color:MID_GREY,fontWeight:600,display:"block",marginBottom:4}}>
+                    Reference Number {refLoading?<span style={{color:MID_GREY,fontWeight:400}}>(syncing…)</span>:<span style={{color:GREEN,fontWeight:400}}>(shared — auto-numbered)</span>}
+                  </label>
                   <div style={{display:"flex",alignItems:"center",gap:6}}>
                     <span style={{color:BLUE,fontWeight:700,fontSize:13,whiteSpace:"nowrap"}}>{docPrefix(docType)}/</span>
                     {inp(refNum,setRefNum,"001","text",{width:120})}
@@ -707,6 +752,19 @@ Statut: ${soaData.paid ? "✅ Entièrement payé — Merci!" : "⏳ Solde dû"}
               </div>
             </>)}
 
+            {/* Bank details toggle (Quotation only) */}
+            {docType==="Quotation"&&card(<>
+              {sectionTitle("🏦","Bank Details on Quotation")}
+              <div style={{display:"flex",gap:10}}>
+                <button onClick={()=>setIncludeBank(true)} style={{flex:1,padding:"10px 14px",borderRadius:8,border:`2px solid ${includeBank?BLUE:"#ddd"}`,background:includeBank?BLUE:"#fff",color:includeBank?"#fff":DARK_GREY,fontWeight:600,cursor:"pointer",fontSize:13}}>
+                  ✅ Include Bank Details
+                </button>
+                <button onClick={()=>setIncludeBank(false)} style={{flex:1,padding:"10px 14px",borderRadius:8,border:`2px solid ${!includeBank?BLUE:"#ddd"}`,background:!includeBank?BLUE:"#fff",color:!includeBank?"#fff":DARK_GREY,fontWeight:600,cursor:"pointer",fontSize:13}}>
+                  🚫 Without Bank Details
+                </button>
+              </div>
+            </>)}
+
             {/* Actions */}
             <div style={{display:"flex",gap:12,justifyContent:"flex-end",flexWrap:"wrap"}}>
               <button onClick={downloadDoc} style={{background:BLUE,color:"#fff",border:"none",borderRadius:10,padding:"13px 28px",fontSize:14,fontWeight:700,cursor:"pointer",boxShadow:`0 4px 14px ${BLUE}55`}}>
@@ -714,10 +772,12 @@ Statut: ${soaData.paid ? "✅ Entièrement payé — Merci!" : "⏳ Solde dû"}
               </button>
             </div>
 
-            {/* Bank info */}
-            <div style={{background:LIGHT_BLUE,borderRadius:10,padding:"12px 16px",fontSize:12,color:MID_GREY,border:`1px solid ${BLUE}20`}}>
-              <strong style={{color:BLUE}}>🏦 Bank Details:</strong> {SUPPLIER.name} — {SUPPLIER.bank}
-            </div>
+            {/* Bank info (informational, always shows the real details on file) */}
+            {(docType!=="Quotation"||includeBank)&&(
+              <div style={{background:LIGHT_BLUE,borderRadius:10,padding:"12px 16px",fontSize:12,color:MID_GREY,border:`1px solid ${BLUE}20`}}>
+                <strong style={{color:BLUE}}>🏦 Bank Details:</strong> {SUPPLIER.name} — {SUPPLIER.bank}
+              </div>
+            )}
           </div>
         )}
 
@@ -769,6 +829,30 @@ Statut: ${soaData.paid ? "✅ Entièrement payé — Merci!" : "⏳ Solde dû"}
               <div style={{background:LIGHT_BLUE,borderRadius:8,padding:12,marginBottom:16,fontSize:13}}>
                 <strong style={{color:BLUE}}>Current document:</strong> {docType} – {ref} – {client.name||"(no client)"} – Rs {fmt(grandTotal)}
               </div>
+
+              <div style={{display:"flex",gap:20,flexWrap:"wrap",marginBottom:16}}>
+                <div>
+                  <label style={{fontSize:12,color:MID_GREY,fontWeight:600,display:"block",marginBottom:6}}>Client Type</label>
+                  <div style={{display:"flex",gap:8}}>
+                    {[["first-time","🆕 First-time"],["returning","🔁 Returning"]].map(([val,label])=>(
+                      <button key={val} onClick={()=>setClientType(val)} style={{padding:"7px 14px",borderRadius:8,border:`2px solid ${clientType===val?BLUE:"#ddd"}`,background:clientType===val?BLUE:"#fff",color:clientType===val?"#fff":DARK_GREY,fontWeight:600,cursor:"pointer",fontSize:12}}>
+                        {label}
+                      </button>
+                    ))}
+                  </div>
+                </div>
+                <div>
+                  <label style={{fontSize:12,color:MID_GREY,fontWeight:600,display:"block",marginBottom:6}}>Language</label>
+                  <div style={{display:"flex",gap:8}}>
+                    {[["en","🇬🇧 English"],["fr","🇫🇷 Français"]].map(([val,label])=>(
+                      <button key={val} onClick={()=>setMsgLang(val)} style={{padding:"7px 14px",borderRadius:8,border:`2px solid ${msgLang===val?BLUE:"#ddd"}`,background:msgLang===val?BLUE:"#fff",color:msgLang===val?"#fff":DARK_GREY,fontWeight:600,cursor:"pointer",fontSize:12}}>
+                        {label}
+                      </button>
+                    ))}
+                  </div>
+                </div>
+              </div>
+
               <div style={{display:"flex",gap:12,flexWrap:"wrap"}}>
                 <button onClick={generateEmail} disabled={generatingMsg} style={{background:BLUE,color:"#fff",border:"none",borderRadius:8,padding:"10px 20px",cursor:"pointer",fontWeight:600,fontSize:13,opacity:generatingMsg?0.6:1}}>
                   {generatingMsg?"⏳ Generating...":"✉️ Generate Email Draft"}
