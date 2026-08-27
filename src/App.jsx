@@ -89,7 +89,6 @@ export default function App(){
         setDbReady(true);
       }
     })();
-    // eslint-disable-next-line react-hooks/exhaustive-deps
   },[]);
 
   // ── Pull the next shared reference number whenever the document type changes ──
@@ -104,7 +103,6 @@ export default function App(){
       }catch{ /* keep whatever refNum was already there */ }
       setRefLoading(false);
     })();
-    // eslint-disable-next-line react-hooks/exhaustive-deps
   },[docType]);
 
   // ── Notify helper ──────────────────────────────
