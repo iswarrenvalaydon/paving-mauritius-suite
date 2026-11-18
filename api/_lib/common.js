@@ -71,6 +71,41 @@ async function downloadMedia(mediaId) {
   return { mime, base64: buf.toString("base64"), size: buf.length };
 }
 
+// Saves a bot suggestion. If the "quote" column hasn't been added in Supabase yet,
+// the suggestion is still saved without it.
+async function insertDraft(row) {
+  let res = await db().from("wa_drafts").insert(row).select().single();
+  if (res.error && row.quote !== undefined && /quote/i.test(res.error.message || "")) {
+    const { quote, ...rest } = row;
+    res = await db().from("wa_drafts").insert({ ...rest, team_note: [rest.team_note, quote ? "A quotation was prepared but could not be saved: add the quote column in Supabase." : ""].filter(Boolean).join(" ") || null }).select().single();
+  }
+  if (res.error) throw res.error;
+  return res.data;
+}
+
+async function uploadMedia(buffer, mime, filename) {
+  const form = new FormData();
+  form.append("messaging_product", "whatsapp");
+  form.append("type", mime);
+  form.append("file", new Blob([buffer], { type: mime }), filename);
+  const res = await fetch(`${D360_BASE}/media`, { method: "POST", headers: { "D360-API-KEY": process.env.D360_API_KEY }, body: form });
+  const data = await res.json().catch(() => ({}));
+  if (!res.ok || !data.id) {
+    const err = new Error(`WhatsApp upload: ${data?.error?.message || res.status}`);
+    err.data = data;
+    throw err;
+  }
+  return data.id;
+}
+
+async function sendDocument(to, mediaId, filename, caption) {
+  const data = await d360("/messages", {
+    method: "POST",
+    body: { messaging_product: "whatsapp", recipient_type: "individual", to, type: "document", document: { id: mediaId, filename, caption: caption || undefined } },
+  });
+  return data?.messages?.[0]?.id || `local-${Date.now()}`;
+}
+
 async function getSetting(key, fallback) {
   const { data } = await db().from("wa_settings").select("value").eq("key", key).maybeSingle();
   return data && data.value !== null && data.value !== undefined ? data.value : fallback;
@@ -89,4 +124,4 @@ function fmtTime(iso) {
   return new Date(iso).toLocaleString("en-GB", { timeZone: TZ, weekday: "short", day: "2-digit", month: "short", hour: "2-digit", minute: "2-digit" });
 }
 
-module.exports = { db, hookToken, safeEqual, d360, sendText, downloadMedia, getSetting, setSetting, logEvent, fmtTime, TZ };
+module.exports = { db, hookToken, safeEqual, d360, sendText, downloadMedia, uploadMedia, sendDocument, insertDraft, getSetting, setSetting, logEvent, fmtTime, TZ };

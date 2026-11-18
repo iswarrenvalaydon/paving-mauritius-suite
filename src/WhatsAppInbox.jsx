@@ -1,4 +1,5 @@
 import { useState, useEffect, useCallback, useRef } from "react";
+import QuoteEditor from "./QuoteEditor";
 
 // WhatsApp tab: chats on 5725 4201, the bot's suggested replies, and approve / edit / discard.
 // All data goes through /api/wa-admin, which checks the Suite password set in Vercel.
@@ -54,7 +55,8 @@ export default function WhatsAppInbox(){
   const [info,setInfo]=useState("");
   const [setup,setSetup]=useState(null);
   const [filter,setFilter]=useState("all");
-  const [media,setMedia]=useState({}); // message id -> {url,mime} | {loading} | {error}
+  const [media,setMedia]=useState({});
+  const [quoteOpen,setQuoteOpen]=useState(false); // message id -> {url,mime} | {loading} | {error}
   const draftIdRef=useRef(null);
   const bottomRef=useRef(null);
 
@@ -139,7 +141,7 @@ export default function WhatsAppInbox(){
   }
 
   function openChat(waId){
-    setSelected(waId); setChat(null); setView("chat"); setMedia({});
+    setSelected(waId); setChat(null); setView("chat"); setMedia({}); setQuoteOpen(false);
     draftIdRef.current=null; setDraftText(""); setManualText(""); setInfo("");
     loadChat(waId);
   }
@@ -164,6 +166,12 @@ export default function WhatsAppInbox(){
       return r;
     }catch(e){ setError(e.message); return null; }
     finally{ setBusy(false); }
+  }
+
+  async function quoteSent(ref){
+    setInfo(`✅ Quotation ${ref} sent and saved`);
+    setQuoteOpen(false); draftIdRef.current=null; setDraftText("");
+    await loadChat(selected); loadChats();
   }
 
   async function discardDraft(){
@@ -324,11 +332,20 @@ export default function WhatsAppInbox(){
               {draft.needs_team?"⚠️ Bot suggestion – needs your decision":"🤖 Bot suggestion – check and send"}
             </div>
             {draft.team_note&&<div style={{fontSize:13,color:"#333",marginBottom:8}}><b>Note for the team:</b> {draft.team_note}</div>}
-            <textarea value={draftText} onChange={e=>setDraftText(e.target.value)} rows={Math.min(10,Math.max(3,draftText.split("\n").length+1))}
-              placeholder="(The bot suggests no reply. Write one here if needed.)"
-              style={{width:"100%",boxSizing:"border-box",padding:10,fontSize:14,borderRadius:8,border:"1px solid #ccc",fontFamily:"inherit"}}/>
+            {draft.quote?(
+              <QuoteEditor key={draft.id} quote={draft.quote} contact={chat.contact} caption={draft.body} draftId={draft.id}
+                waId={selected} api={api} onSent={quoteSent}/>
+            ):(
+              <>
+                <textarea value={draftText} onChange={e=>setDraftText(e.target.value)} rows={Math.min(10,Math.max(3,draftText.split("\n").length+1))}
+                  placeholder="(The bot suggests no reply. Write one here if needed.)"
+                  style={{width:"100%",boxSizing:"border-box",padding:10,fontSize:14,borderRadius:8,border:"1px solid #ccc",fontFamily:"inherit"}}/>
+                <div style={{display:"flex",gap:8,flexWrap:"wrap",marginTop:8}}>
+                  <button onClick={()=>sendMessage(draftText,draft.id)} disabled={busy||!draftText.trim()} style={btn(GREEN,"#fff")}>{busy?"…":"✅ Send"}</button>
+                </div>
+              </>
+            )}
             <div style={{display:"flex",gap:8,flexWrap:"wrap",marginTop:8}}>
-              <button onClick={()=>sendMessage(draftText,draft.id)} disabled={busy||!draftText.trim()} style={btn(GREEN,"#fff")}>{busy?"…":"✅ Send"}</button>
               <button onClick={discardDraft} disabled={busy} style={btn("#fff","#B00020",{border:"1px solid #B00020"})}>✖ Discard</button>
               <button onClick={redraft} disabled={busy} style={btn("#fff",BLUE,{border:`1px solid ${BLUE}`})}>↻ New suggestion</button>
             </div>
@@ -341,7 +358,12 @@ export default function WhatsAppInbox(){
           <div style={{display:"flex",gap:8,flexWrap:"wrap",marginTop:6}}>
             <button onClick={()=>sendMessage(manualText,null)} disabled={busy||!manualText.trim()} style={btn(BLUE,"#fff")}>Send my message</button>
             {!draft&&<button onClick={redraft} disabled={busy} style={btn("#fff",BLUE,{border:`1px solid ${BLUE}`})}>🤖 Ask the bot for a reply</button>}
+            {!(draft&&draft.quote)&&!quoteOpen&&<button onClick={()=>setQuoteOpen(true)} disabled={busy} style={btn("#fff",BLUE,{border:`1px solid ${BLUE}`})}>📄 Make a quotation</button>}
           </div>
+          {quoteOpen&&!(draft&&draft.quote)&&chat&&(
+            <QuoteEditor key="manual" quote={null} contact={chat.contact} caption="" draftId={null}
+              waId={selected} api={api} onSent={quoteSent} onCancel={()=>setQuoteOpen(false)}/>
+          )}
         </div>
       </div>
     );

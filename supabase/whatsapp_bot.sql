@@ -67,3 +67,6 @@ alter table wa_messages enable row level security;
 alter table wa_drafts   enable row level security;
 alter table wa_settings enable row level security;
 alter table wa_events   enable row level security;
+
+-- Added for quotations from WhatsApp (18 Nov 2026)
+alter table wa_drafts add column if not exists quote jsonb;

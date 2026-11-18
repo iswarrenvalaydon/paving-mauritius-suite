@@ -35,8 +35,17 @@ How to answer:
 Current time in Mauritius: ${now}.
 Client: ${contact?.name || contact?.profile_name || "unknown"} (+${contact?.wa_id || ""}).
 
+Quotations:
+- When you know the product, size, colour and the quantity (from measurements the client has confirmed), prepare a formal quotation in "quote". The team checks it and sends it as a PDF, with your "reply" as the message that goes with the PDF (for example "Here is your quotation for your driveway. Let me know if you have any questions.").
+- Quantity in pieces = area in m² × pieces per m², rounded up to a whole piece. For two-colour or framed designs, follow the rulebook.
+- unit_price_incl_vat is the list price per piece from the rulebook, VAT included. Never apply a discount.
+- client_name: the client's name if known, otherwise their WhatsApp name. location: town or site address if known.
+- summary: one line for the team, e.g. "20 m² driveway, pavers 60 mm, Light Grey".
+- If you don't have enough information yet, set "quote" to null and ask for what is missing.
+
 Reply with ONLY a JSON object, no other text:
-{"reply": "<message to send, or empty>", "needs_team": true|false, "team_note": "<short note or empty>"}`;
+{"reply": "<message to send, or empty>", "needs_team": true|false, "team_note": "<short note or empty>",
+ "quote": null | {"client_name": "", "location": "", "summary": "", "items": [{"desc": "Pavers 200x100x60mm – Light Grey", "qty": 1000, "unit_price_incl_vat": 13.5}]}}`;
 }
 
 function transcript(messages, labels) {
@@ -123,7 +132,28 @@ async function draftReply(waId) {
     reply: String(parsed.reply || "").trim(),
     needs_team: Boolean(parsed.needs_team),
     team_note: String(parsed.team_note || "").trim(),
+    quote: cleanQuote(parsed.quote),
   };
 }
 
-module.exports = { draftReply };
+// Keep only sensible quotation lines; the team can still edit everything before sending.
+function cleanQuote(q) {
+  if (!q || typeof q !== "object" || !Array.isArray(q.items)) return null;
+  const items = q.items
+    .map((i) => ({
+      desc: String(i?.desc || "").slice(0, 120).trim(),
+      qty: Math.max(0, Math.ceil(Number(i?.qty) || 0)),
+      unit_price_incl_vat: Math.max(0, Number(i?.unit_price_incl_vat) || 0),
+    }))
+    .filter((i) => i.desc && i.qty > 0)
+    .slice(0, 12);
+  if (!items.length) return null;
+  return {
+    client_name: String(q.client_name || "").slice(0, 120).trim(),
+    location: String(q.location || "").slice(0, 200).trim(),
+    summary: String(q.summary || "").slice(0, 300).trim(),
+    items,
+  };
+}
+
+module.exports = { draftReply, cleanQuote };

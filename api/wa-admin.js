@@ -1,6 +1,6 @@
 // Everything the Suite's WhatsApp tab does goes through here, protected by the SUITE_PASSWORD
 // set in Vercel. The browser never sees the WhatsApp, Claude or Supabase secret keys.
-const { db, hookToken, safeEqual, d360, sendText, downloadMedia, getSetting, setSetting, logEvent } = require("./_lib/common");
+const { db, hookToken, safeEqual, d360, sendText, downloadMedia, uploadMedia, sendDocument, insertDraft, getSetting, setSetting, logEvent } = require("./_lib/common");
 const { draftReply } = require("./_lib/drafter");
 
 const digits = (s) => String(s || "").replace(/\D/g, "");
@@ -73,11 +73,36 @@ async function redraft(waId) {
   if (!draft) throw new Error("No messages in this chat yet");
   await db().from("wa_drafts").update({ status: "superseded", decided_at: new Date().toISOString() }).eq("wa_id", waId).eq("status", "pending");
   const { data: last } = await db().from("wa_messages").select("id").eq("wa_id", waId).eq("direction", "in").order("sent_at", { ascending: false }).limit(1);
-  const { data, error } = await db().from("wa_drafts").insert({
+  return insertDraft({
     wa_id: waId, reply_to: last?.[0]?.id || null, body: draft.reply, needs_team: draft.needs_team, team_note: draft.team_note || null,
-  }).select().single();
-  if (error) throw error;
-  return data;
+    ...(draft.quote ? { quote: draft.quote } : {}),
+  });
+}
+
+// Sends a PDF made in the Suite (an approved quotation) to the client.
+async function sendPdf(waId, { filename, data, caption, draftId }) {
+  const name = String(filename || "Quotation.pdf").replace(/[^\w.\-]/g, "_");
+  const buf = Buffer.from(String(data || ""), "base64");
+  if (buf.length < 100 || buf.slice(0, 4).toString() !== "%PDF") throw new Error("The PDF could not be created");
+  const text = String(caption || "").trim();
+  try {
+    const mediaId = await uploadMedia(buf, "application/pdf", name);
+    const id = await sendDocument(waId, mediaId, name, text);
+    const now = new Date().toISOString();
+    await db().from("wa_messages").upsert({
+      id, wa_id: waId, direction: "out", source: "suite", type: "document", media_id: mediaId,
+      body: `[Document ${name}]${text ? ` ${text}` : ""}`, status: "sent", sent_at: now,
+    }, { onConflict: "id", ignoreDuplicates: true });
+    await db().from("wa_contacts").update({ last_message_at: now, unread: 0 }).eq("wa_id", waId);
+    await db().from("wa_drafts").update({ status: "superseded", decided_at: now }).eq("wa_id", waId).eq("status", "pending").neq("id", draftId || 0);
+    if (draftId) await db().from("wa_drafts").update({ status: "sent", body: text, decided_at: now }).eq("id", draftId);
+    return { ok: true, id };
+  } catch (err) {
+    const late = JSON.stringify(err.data || "").includes("131047");
+    throw new Error(late
+      ? "This client last wrote more than 24 hours ago, so WhatsApp won't let us send the quotation now. Send it from the phone, or wait for the client to write again."
+      : String(err.message || err));
+  }
 }
 
 async function connectWebhook(req) {
@@ -124,6 +149,7 @@ module.exports = async function handler(req, res) {
       case "chats": return res.json({ chats: await listChats(), bot_enabled: await getSetting("bot_enabled", true) });
       case "chat": return res.json(await getChat(waId));
       case "send": return res.json(await send(waId, body, draftId));
+      case "send_pdf": return res.json(await sendPdf(waId, { filename: req.body.filename, data: req.body.data, caption: body, draftId }));
       case "discard":
         await db().from("wa_drafts").update({ status: "discarded", decided_at: new Date().toISOString() }).eq("id", draftId);
         return res.json({ ok: true });
