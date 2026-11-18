@@ -33,6 +33,14 @@ function bodyOf(m) {
     default: return `[${m.type || "message"}]`;
   }
 }
+// Clients who tap a Facebook / Instagram "Send WhatsApp message" ad arrive with the ad attached.
+function adOf(m) {
+  const r = m?.referral;
+  if (!r) return "";
+  const what = [r.headline, r.body].filter(Boolean).map((t) => String(t).replace(/\s+/g, " ").trim()).join(" – ").slice(0, 300);
+  const src = r.source_type === "post" ? "Facebook post" : "Facebook ad";
+  return `[From ${src}${what ? `: "${what}"` : ""}${r.source_url ? ` ${r.source_url}` : ""}] `;
+}
 function mediaIdOf(m) {
   return m?.[m?.type]?.id || null;
 }
@@ -124,8 +132,9 @@ async function handle(body) {
         }));
         const newIds = await insertMessages(msgs.map((m) => ({
           id: m.id, wa_id: digits(m.from), direction: "in", source: "client", type: m.type,
-          body: bodyOf(m), media_id: mediaIdOf(m), sent_at: isoFromTs(m.timestamp),
+          body: adOf(m) + bodyOf(m), media_id: mediaIdOf(m), sent_at: isoFromTs(m.timestamp),
         })));
+        for (const m of msgs) if (m.referral) await logEvent("ad_referral", { wa_id: digits(m.from), message_id: m.id, referral: m.referral });
         await refreshLastMessage(msgs.map((m) => digits(m.from)));
         for (const m of msgs) {
           if (!newIds.includes(m.id)) continue; // retry of something we already have
