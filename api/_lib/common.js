@@ -58,6 +58,19 @@ async function sendText(to, body) {
   return data?.messages?.[0]?.id || `local-${Date.now()}`;
 }
 
+// Downloads a photo or document a client sent. WhatsApp gives a Meta link, which must be
+// fetched through 360dialog's host with our key. Returns { mime, base64, size }.
+async function downloadMedia(mediaId) {
+  const meta = await d360(`/${encodeURIComponent(mediaId)}`);
+  if (!meta?.url) throw new Error("No media link");
+  const u = new URL(meta.url);
+  const res = await fetch(`${D360_BASE}${u.pathname}${u.search}`, { headers: { "D360-API-KEY": process.env.D360_API_KEY } });
+  if (!res.ok) throw new Error(`Media download failed (${res.status})`);
+  const buf = Buffer.from(await res.arrayBuffer());
+  const mime = String(meta.mime_type || res.headers.get("content-type") || "").split(";")[0].trim();
+  return { mime, base64: buf.toString("base64"), size: buf.length };
+}
+
 async function getSetting(key, fallback) {
   const { data } = await db().from("wa_settings").select("value").eq("key", key).maybeSingle();
   return data && data.value !== null && data.value !== undefined ? data.value : fallback;
@@ -76,4 +89,4 @@ function fmtTime(iso) {
   return new Date(iso).toLocaleString("en-GB", { timeZone: TZ, weekday: "short", day: "2-digit", month: "short", hour: "2-digit", minute: "2-digit" });
 }
 
-module.exports = { db, hookToken, safeEqual, d360, sendText, getSetting, setSetting, logEvent, fmtTime, TZ };
+module.exports = { db, hookToken, safeEqual, d360, sendText, downloadMedia, getSetting, setSetting, logEvent, fmtTime, TZ };

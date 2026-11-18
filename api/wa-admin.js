@@ -1,6 +1,6 @@
 // Everything the Suite's WhatsApp tab does goes through here, protected by the SUITE_PASSWORD
 // set in Vercel. The browser never sees the WhatsApp, Claude or Supabase secret keys.
-const { db, hookToken, safeEqual, d360, sendText, getSetting, setSetting, logEvent } = require("./_lib/common");
+const { db, hookToken, safeEqual, d360, sendText, downloadMedia, getSetting, setSetting, logEvent } = require("./_lib/common");
 const { draftReply } = require("./_lib/drafter");
 
 const digits = (s) => String(s || "").replace(/\D/g, "");
@@ -38,7 +38,7 @@ async function listChats() {
 async function getChat(waId) {
   const [{ data: contact }, { data: messages }, { data: drafts }] = await Promise.all([
     db().from("wa_contacts").select("*").eq("wa_id", waId).maybeSingle(),
-    db().from("wa_messages").select("id,direction,source,type,body,status,sent_at").eq("wa_id", waId).order("sent_at", { ascending: false }).limit(150),
+    db().from("wa_messages").select("id,direction,source,type,body,media_id,status,sent_at").eq("wa_id", waId).order("sent_at", { ascending: false }).limit(150),
     db().from("wa_drafts").select("*").eq("wa_id", waId).eq("status", "pending").order("created_at", { ascending: false }).limit(1),
   ]);
   await db().from("wa_contacts").update({ unread: 0 }).eq("wa_id", waId);
@@ -138,6 +138,13 @@ module.exports = async function handler(req, res) {
         await setSetting("staff_numbers", (Array.isArray(value) ? value : []).map(digits).filter(Boolean));
         return res.json({ ok: true });
       case "connect_webhook": return res.json(await connectWebhook(req));
+      case "media": {
+        const { data: msg } = await db().from("wa_messages").select("media_id").eq("id", String(req.body.message_id || "")).maybeSingle();
+        if (!msg?.media_id) throw new Error("No photo or file on this message");
+        const file = await downloadMedia(msg.media_id);
+        if (file.size > 8 * 1024 * 1024) throw new Error("File too large to show here; open it on the phone");
+        return res.json({ mime: file.mime, data: file.base64 });
+      }
       default: return res.status(400).json({ error: "Unknown action" });
     }
   } catch (err) {

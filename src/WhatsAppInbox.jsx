@@ -54,6 +54,7 @@ export default function WhatsAppInbox(){
   const [info,setInfo]=useState("");
   const [setup,setSetup]=useState(null);
   const [filter,setFilter]=useState("all");
+  const [media,setMedia]=useState({}); // message id -> {url,mime} | {loading} | {error}
   const draftIdRef=useRef(null);
   const bottomRef=useRef(null);
 
@@ -127,8 +128,18 @@ export default function WhatsAppInbox(){
     setBusy(false);
   }
 
+  async function showMedia(messageId){
+    setMedia(m=>({...m,[messageId]:{loading:true}}));
+    try{
+      const r=await api("media",{message_id:messageId});
+      const bytes=Uint8Array.from(window.atob(r.data),c=>c.charCodeAt(0));
+      const url=URL.createObjectURL(new Blob([bytes],{type:r.mime}));
+      setMedia(m=>({...m,[messageId]:{url,mime:r.mime}}));
+    }catch(e){ setMedia(m=>({...m,[messageId]:{error:e.message}})); }
+  }
+
   function openChat(waId){
-    setSelected(waId); setChat(null); setView("chat");
+    setSelected(waId); setChat(null); setView("chat"); setMedia({});
     draftIdRef.current=null; setDraftText(""); setManualText(""); setInfo("");
     loadChat(waId);
   }
@@ -283,6 +294,19 @@ export default function WhatsAppInbox(){
             <div key={m.id} style={{display:"flex",justifyContent:m.direction==="in"?"flex-start":"flex-end",margin:"4px 0"}}>
               <div style={{maxWidth:"80%",background:m.direction==="in"?"#fff":"#D9FDD3",borderRadius:8,padding:"7px 10px",fontSize:14,whiteSpace:"pre-wrap",wordBreak:"break-word",boxShadow:"0 1px 1px #0001"}}>
                 {m.body}
+                {m.media_id&&(m.type==="image"||m.type==="document")&&(()=>{
+                  const f=media[m.id];
+                  if(f&&f.url&&f.mime.startsWith("image/")) return <img src={f.url} alt="Sent in this chat" style={{display:"block",maxWidth:"100%",borderRadius:6,marginTop:6}}/>;
+                  if(f&&f.url) return <div style={{marginTop:6}}><a href={f.url} target="_blank" rel="noreferrer" style={{color:BLUE,fontWeight:600}}>📄 Open file</a></div>;
+                  return(
+                    <div style={{marginTop:6}}>
+                      <button onClick={()=>showMedia(m.id)} disabled={Boolean(f&&f.loading)} style={btn(LIGHT_BLUE,BLUE,{padding:"5px 10px",fontSize:12})}>
+                        {f&&f.loading?"Loading…":m.type==="image"?"📷 Show photo":"📄 Show file"}
+                      </button>
+                      {f&&f.error&&<div style={{color:"#B00020",fontSize:11,marginTop:4}}>{f.error}</div>}
+                    </div>
+                  );
+                })()}
                 <div style={{fontSize:10,color:MID_GREY,textAlign:"right",marginTop:3}}>
                   {[sourceLabel(m),when(m.sent_at),m.status==="failed"?"⚠️ failed":""].filter(Boolean).join(" · ")}
                 </div>
