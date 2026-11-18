@@ -1,5 +1,6 @@
 import { useState, useRef, useEffect } from "react";
 import { supabase } from "./supabaseClient";
+import WhatsAppInbox from "./WhatsAppInbox";
 
 const LOGO_URL = "https://raw.githubusercontent.com/iswarrenvalaydon/paving-mauritius-suite/main/paving-logo.png";
 
@@ -582,7 +583,7 @@ ${bankLine}${closing}`;
 
       {/* Tabs */}
       <div style={{background:"#fff",borderBottom:`3px solid ${BLUE}`,display:"flex",gap:0,overflowX:"auto"}}>
-        {[["generator","📄 Documents"],["pricelist","💰 Price List"],["comms","📨 Communications"],["analysis","📊 Analysis"]].map(([t,label])=>(
+        {[["generator","📄 Documents"],["whatsapp","💬 WhatsApp"],["pricelist","💰 Price List"],["comms","📨 Communications"],["analysis","📊 Analysis"]].map(([t,label])=>(
           <button key={t} onClick={()=>setTab(t)} style={{padding:"12px 22px",border:"none",cursor:"pointer",fontWeight:600,fontSize:13,background:tab===t?BLUE:"transparent",color:tab===t?"#fff":BLUE,whiteSpace:"nowrap"}}>
             {label}
           </button>
@@ -590,6 +591,8 @@ ${bankLine}${closing}`;
       </div>
 
       <div style={{maxWidth:900,margin:"24px auto",padding:"0 16px",paddingBottom:40}}>
+
+        {tab==="whatsapp"&&<WhatsAppInbox/>}
 
         {/* ══ GENERATOR TAB ══ */}
         {tab==="generator"&&(
