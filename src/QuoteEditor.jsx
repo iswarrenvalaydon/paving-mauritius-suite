@@ -34,6 +34,7 @@ export default function QuoteEditor({quote,contact,caption,draftId,waId,api,onSe
   const [working,setWorking]=useState(false);
   const [err,setErr]=useState("");
   const [previewUrl,setPreviewUrl]=useState("");
+  const [savedRef,setSavedRef]=useState("");
 
   const calc=lines.map(l=>{
     const qty=parseFloat(l.qty)||0;
@@ -46,7 +47,9 @@ export default function QuoteEditor({quote,contact,caption,draftId,waId,api,onSe
   const client={name:name.trim(),address:location.trim(),city:"",area:"",brn:"",vat:"",contact:`+${waId}`,email:""};
   const ready=Boolean(calc.length&&name.trim()&&bank);
 
-  function setLine(i,patch){ setLines(ls=>ls.map((l,j)=>j===i?{...l,...patch}:l)); setPreviewUrl(""); }
+  // Any edit after saving means a new quotation, so it will get a new number.
+  function changed(){ setPreviewUrl(""); setSavedRef(""); }
+  function setLine(i,patch){ setLines(ls=>ls.map((l,j)=>j===i?{...l,...patch}:l)); changed(); }
   function pick(i,idx){
     const o=PRODUCT_OPTIONS[Number(idx)];
     if(o) setLine(i,{desc:o.desc,price:String(o.price)});
@@ -68,25 +71,48 @@ export default function QuoteEditor({quote,contact,caption,draftId,waId,api,onSe
     setWorking(false);
   }
 
+  // Takes the next number from the same counter as the Documents tab.
+  async function nextRef(){
+    const {data:num,error}=await supabase.rpc("get_next_ref",{p_doc_type:"Quotation"});
+    if(error||num===null||num===undefined) throw new Error("Could not get the next quotation number");
+    return `${docPrefix("Quotation")}/${String(num).padStart(3,"0")}`;
+  }
+
+  async function record(ref){
+    try{
+      await supabase.from("documents").insert({
+        doc_type:"Quotation",ref,doc_date:todayMU(),client_name:client.name||null,client_snapshot:client,
+        items:calc,include_bank:bank==="sbm",total,
+      });
+    }catch{ /* the PDF exists; only the record failed */ }
+  }
+
   async function approve(){
     if(!ready) return;
     setErr(""); setWorking(true);
     try{
-      const {data:num,error}=await supabase.rpc("get_next_ref",{p_doc_type:"Quotation"});
-      if(error||num===null||num===undefined) throw new Error("Could not get the next quotation number");
-      const ref=`${docPrefix("Quotation")}/${String(num).padStart(3,"0")}`;
+      const ref=savedRef||await nextRef();
       const doc=await makePdf(ref);
       await api("send_pdf",{
         wa_id:waId,filename:`${ref.replace(/\//g,"_")}.pdf`,data:toBase64(doc.output("arraybuffer")),
         body:message,draft_id:draftId||null,
       });
-      try{
-        await supabase.from("documents").insert({
-          doc_type:"Quotation",ref,doc_date:todayMU(),client_name:client.name||null,client_snapshot:client,
-          items:calc,include_bank:bank==="sbm",total,
-        });
-      }catch{ /* the quotation was sent; only the record failed */ }
+      if(!savedRef) await record(ref);
       onSent(ref);
+    }catch(e){ setErr(e.message); }
+    setWorking(false);
+  }
+
+  // For sending from the phone: real number, saved with the documents, PDF downloaded.
+  async function saveOnly(){
+    if(!ready) return;
+    setErr(""); setWorking(true);
+    try{
+      const ref=savedRef||await nextRef();
+      const doc=await makePdf(ref);
+      if(!savedRef) await record(ref);
+      setSavedRef(ref);
+      doc.save(`${ref.replace(/\//g,"_")}.pdf`);
     }catch(e){ setErr(e.message); }
     setWorking(false);
   }
@@ -97,8 +123,8 @@ export default function QuoteEditor({quote,contact,caption,draftId,waId,api,onSe
       {quote&&quote.summary&&<div style={{fontSize:13,color:MID_GREY,marginBottom:8}}>{quote.summary}</div>}
 
       <div style={{display:"grid",gap:6,marginBottom:10}}>
-        <input value={name} onChange={e=>{ setName(e.target.value); setPreviewUrl(""); }} placeholder="Client name (on the quotation)" style={field}/>
-        <input value={location} onChange={e=>{ setLocation(e.target.value); setPreviewUrl(""); }} placeholder="Address / town (optional)" style={field}/>
+        <input value={name} onChange={e=>{ setName(e.target.value); changed(); }} placeholder="Client name (on the quotation)" style={field}/>
+        <input value={location} onChange={e=>{ setLocation(e.target.value); changed(); }} placeholder="Address / town (optional)" style={field}/>
       </div>
 
       {lines.map((l,i)=>{
@@ -114,7 +140,7 @@ export default function QuoteEditor({quote,contact,caption,draftId,waId,api,onSe
             <div style={{display:"flex",gap:6,alignItems:"center"}}>
               <input value={l.qty} onChange={e=>setLine(i,{qty:e.target.value})} placeholder="Pieces" inputMode="numeric" style={{...field,flex:1}}/>
               <input value={l.price} onChange={e=>setLine(i,{price:e.target.value})} placeholder="Rs/piece incl. VAT" inputMode="decimal" style={{...field,flex:1}}/>
-              <button onClick={()=>{ setLines(ls=>ls.length>1?ls.filter((_,j)=>j!==i):[{desc:"",qty:"",price:""}]); setPreviewUrl(""); }} style={btn("#fff","#B00020",{padding:"6px 10px",border:"1px solid #B00020"})}>✖</button>
+              <button onClick={()=>{ setLines(ls=>ls.length>1?ls.filter((_,j)=>j!==i):[{desc:"",qty:"",price:""}]); changed(); }} style={btn("#fff","#B00020",{padding:"6px 10px",border:"1px solid #B00020"})}>✖</button>
             </div>
             <div style={{fontSize:12,color:MID_GREY,marginTop:4,textAlign:"right"}}>Line total incl. VAT: Rs {fmt(lineTotal)}</div>
           </div>
@@ -131,8 +157,8 @@ export default function QuoteEditor({quote,contact,caption,draftId,waId,api,onSe
 
       <div style={{marginTop:10,fontSize:13,fontWeight:600}}>Bank details on the quotation?</div>
       <div style={{display:"flex",gap:8,marginTop:6}}>
-        <button onClick={()=>{ setBank("sbm"); setPreviewUrl(""); }} style={btn(bank==="sbm"?BLUE:"#f2f2f2",bank==="sbm"?"#fff":"#333",{padding:"8px 12px",fontSize:13})}>SBM</button>
-        <button onClick={()=>{ setBank("none"); setPreviewUrl(""); }} style={btn(bank==="none"?BLUE:"#f2f2f2",bank==="none"?"#fff":"#333",{padding:"8px 12px",fontSize:13})}>None</button>
+        <button onClick={()=>{ setBank("sbm"); changed(); }} style={btn(bank==="sbm"?BLUE:"#f2f2f2",bank==="sbm"?"#fff":"#333",{padding:"8px 12px",fontSize:13})}>SBM</button>
+        <button onClick={()=>{ setBank("none"); changed(); }} style={btn(bank==="none"?BLUE:"#f2f2f2",bank==="none"?"#fff":"#333",{padding:"8px 12px",fontSize:13})}>None</button>
       </div>
 
       <div style={{marginTop:10,fontSize:13,fontWeight:600}}>Message sent with the PDF</div>
@@ -142,11 +168,14 @@ export default function QuoteEditor({quote,contact,caption,draftId,waId,api,onSe
 
       <div style={{display:"flex",gap:8,flexWrap:"wrap",marginTop:10}}>
         <button onClick={approve} disabled={working||!ready} style={btn(ready?GREEN:"#9bbfa7","#fff")}>{working?"Working…":"✅ Approve & send quotation"}</button>
+        <button onClick={saveOnly} disabled={working||!ready} style={btn("#fff",GREEN,{border:`1px solid ${GREEN}`})}>💾 Save PDF only</button>
         <button onClick={preview} disabled={working||!calc.length} style={btn("#fff",BLUE,{border:`1px solid ${BLUE}`})}>👁 Preview PDF</button>
         {previewUrl&&<a href={previewUrl} target="_blank" rel="noreferrer" style={{alignSelf:"center",color:BLUE,fontWeight:600}}>Open preview</a>}
         {onCancel&&<button onClick={onCancel} disabled={working} style={btn("#f2f2f2","#333")}>Close</button>}
       </div>
-      {!ready&&<div style={{fontSize:12,color:MID_GREY,marginTop:6}}>To send: client name, at least one line, and choose SBM or None.</div>}
+      {savedRef&&<div style={{background:"#E8F5ED",color:GREEN,padding:8,borderRadius:6,fontSize:13,marginTop:8}}>✅ {savedRef} saved and downloaded. Send it from the phone, or tap Approve & send to send this same quotation from here. If you change anything, it becomes a new quotation with a new number.</div>}
+      {!ready&&<div style={{fontSize:12,color:MID_GREY,marginTop:6}}>To send or save: client name, at least one line, and choose SBM or None.</div>}
+      <div style={{fontSize:12,color:MID_GREY,marginTop:6}}>Preview PDF shows "(preview)" instead of a number and is not saved. Don't send it to clients.</div>
     </div>
   );
 }
