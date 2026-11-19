@@ -60,7 +60,8 @@ export default function WhatsAppInbox(){
   const [setup,setSetup]=useState(null);
   const [filter,setFilter]=useState("all");
   const [media,setMedia]=useState({});
-  const [quoteOpen,setQuoteOpen]=useState(false); // message id -> {url,mime} | {loading} | {error}
+  const [quoteOpen,setQuoteOpen]=useState(false);
+  const [ravinInput,setRavinInput]=useState(""); // message id -> {url,mime} | {loading} | {error}
   const draftIdRef=useRef(null);
   const bottomRef=useRef(null);
 
@@ -155,8 +156,9 @@ export default function WhatsAppInbox(){
     if(!text.replace(/-{3}/g,"").trim()&&!attach) return;
     setBusy(true); setError(""); setInfo("");
     try{
-      await api("send",{wa_id:selected,body:text,draft_id:draftId||null});
-      setInfo("✅ Sent");
+      const r=await api("send",{wa_id:selected,body:text,draft_id:draftId||null});
+      setInfo(r&&r.referral_sent?"✅ Sent, and Ravin has been told":"✅ Sent");
+      if(r&&r.warning) setError(r.warning);
       if(draftId){ draftIdRef.current=null; setDraftText(""); } else setManualText("");
       await loadChat(selected); loadChats();
     }catch(e){ setError(e.message); }
@@ -275,6 +277,23 @@ export default function WhatsAppInbox(){
                 {busy?"Connecting…":"Connect WhatsApp to the Suite"}
               </button>
             )}
+            <div style={{marginTop:18,fontWeight:700,color:BLUE,fontSize:14}}>Layer referrals (Ravin)</div>
+            <div style={{fontSize:12,color:MID_GREY,marginBottom:6}}>When a client wants a layer, the bot gives Ravin's number and, once you approve, sends Ravin the client's name, number, location, product and area.</div>
+            <div style={{display:"flex",gap:8,alignItems:"center",flexWrap:"wrap"}}>
+              <input value={ravinInput} onChange={e=>setRavinInput(e.target.value)} placeholder={setup.ravin_number?`+${setup.ravin_number}`:"Ravin's number, e.g. 5xxx xxxx"} inputMode="tel"
+                style={{flex:1,minWidth:160,padding:8,fontSize:14,borderRadius:6,border:"1px solid #ccc"}}/>
+              <button onClick={async()=>{ const r=await act("ravin_number",{value:ravinInput},"Ravin's number saved"); if(r){ setRavinInput(""); openSetup(); } }} disabled={busy||!ravinInput.trim()}
+                style={btn(BLUE,"#fff",{padding:"8px 12px",fontSize:13})}>Save</button>
+            </div>
+            {row(Boolean(setup.ravin_number),"Ravin's number",setup.ravin_number?`+${setup.ravin_number}`:"Not saved yet")}
+            {row(setup.referral_template&&setup.referral_template.status==="approved","WhatsApp template for Ravin",
+              setup.referral_template?(setup.referral_template.status==="missing"?"Not created yet":`Status: ${setup.referral_template.status}${setup.referral_template.error?` (${setup.referral_template.error})`:""}`):"")}
+            {setup.referral_template&&setup.referral_template.status==="missing"&&(
+              <button onClick={async()=>{ const r=await act("create_referral_template",{},"Template sent to WhatsApp for approval"); if(r) openSetup(); }} disabled={busy}
+                style={btn(GREEN,"#fff",{marginTop:8,padding:"8px 12px",fontSize:13})}>Create the template</button>
+            )}
+            {setup.referral_template&&String(setup.referral_template.status).toLowerCase().startsWith("pending")&&<div style={{fontSize:12,color:MID_GREY,marginTop:4}}>WhatsApp is reviewing it, usually within minutes, sometimes up to a day.</div>}
+
             <div style={{marginTop:18,fontWeight:700,color:BLUE,fontSize:14}}>What the bot learned from your corrections</div>
             <div style={{fontSize:12,color:MID_GREY,marginBottom:6}}>When you change a suggestion before sending, the bot keeps the example and follows it for all clients. Delete any that shouldn't become a habit.</div>
             {(!setup.examples||!setup.examples.length)&&<div style={{fontSize:13,color:MID_GREY}}>None yet.</div>}
@@ -365,6 +384,11 @@ export default function WhatsAppInbox(){
                   </div>
                 ))}
                 {draft.quote&&draft.quote.attach==="price_list"&&<div style={{fontSize:13,color:BLUE,marginBottom:6}}>📎 The price list PDF is sent after the message.</div>}
+                {draft.quote&&draft.quote.referral&&(
+                  <div style={{fontSize:13,color:BLUE,marginBottom:6}}>
+                    📨 Ravin will also get a message: {[draft.quote.referral.client_name||displayName(chat.contact),draft.quote.referral.location,draft.quote.referral.product,draft.quote.referral.area].filter(Boolean).join(" · ")}
+                  </div>
+                )}
                 <div style={{display:"flex",gap:8,flexWrap:"wrap",marginTop:4}}>
                   <button onClick={()=>sendMessage(draftText,draft.id)} disabled={busy} style={btn(GREEN,"#fff")}>
                     {busy?"…":splitParts(draftText).filter(t=>t.trim()).length>1?`✅ Send ${splitParts(draftText).filter(t=>t.trim()).length} messages`:"✅ Send"}

@@ -20,7 +20,16 @@ ${list.map((e, i) => `${i + 1}. Client: ${String(e.client || "").slice(0, 300)}
 `;
 }
 
-function systemPrompt(rulebook, contact, examples) {
+function referralText(ravin) {
+  if (!ravin) return `
+Layer referral: Ravin's number isn't set up yet. If the client wants a layer's number, set needs_team with the note "Send Ravin's number".
+`;
+  return `
+Layer referral: our main layer is Ravin, WhatsApp +${ravin}. When the client says yes to a layer's number, send it in a short message (e.g. "Here is Ravin's number: +${ravin}. He's one of the good layers we work with.") and fill "referral" with what you know about the client: client_name, location (area, town or address), product and area (m²). Leave a field empty if unknown. The team approves, and Ravin automatically gets a message with these details.
+`;
+}
+
+function systemPrompt(rulebook, contact, examples, ravin) {
   const now = fmtTime(new Date().toISOString());
   return `You are the WhatsApp assistant of Paving Mauritius Ltd, writing replies to clients on the business number 5725 4201.
 Every reply you write is a DRAFT: a team member reads it and approves, edits or discards it before the client sees anything.
@@ -62,12 +71,13 @@ Quotations ("quote"):
 - summary: one line for the team, e.g. "20 m² driveway, pavers 60 mm, Light Grey".
 
 Price list: when the client asks for the price list, set "attach" to "price_list" and send one short line such as "Here is our price list." The PDF goes with it.
-${examplesText(examples)}
+${referralText(ravin)}${examplesText(examples)}
 Current time in Mauritius: ${now}.
 Client: ${contact?.name || contact?.profile_name || "unknown"} (+${contact?.wa_id || ""}).
 
 Reply with ONLY a JSON object, no other text:
 {"messages": ["<short message>", "<short message>"], "needs_team": true|false, "team_note": "<short note or empty>", "attach": null | "price_list",
+ "referral": null | {"client_name": "", "location": "", "product": "", "area": ""},
  "quote": null | {"client_name": "", "location": "", "summary": "", "caption": "Here is your quotation.", "items": [{"desc": "Pavers 200x100x60mm – Light Grey", "qty": 1000, "unit_price_incl_vat": 13.5}]}}`;
 }
 
@@ -129,7 +139,7 @@ async function draftReply(waId) {
   const messages = (recent || []).reverse();
   if (!messages.length) return null;
 
-  const [rulebook, examples] = await Promise.all([getSetting("rulebook", RULEBOOK), getSetting("examples", [])]);
+  const [rulebook, examples, ravin] = await Promise.all([getSetting("rulebook", RULEBOOK), getSetting("examples", []), getSetting("ravin_number", "")]);
   const { labels, blocks } = await mediaBlocks(messages);
   const content = [
     { type: "text", text: `Conversation so far (oldest first):\n${transcript(messages, labels)}` },
@@ -142,7 +152,7 @@ async function draftReply(waId) {
     body: JSON.stringify({
       model: MODEL,
       max_tokens: 1500,
-      system: systemPrompt(typeof rulebook === "string" ? rulebook : RULEBOOK, contact, examples),
+      system: systemPrompt(typeof rulebook === "string" ? rulebook : RULEBOOK, contact, examples, String(ravin || "").replace(/\D/g, "")),
       messages: [{ role: "user", content }],
     }),
   });
@@ -162,13 +172,21 @@ async function draftReply(waId) {
     team_note: String(parsed.team_note || "").trim(),
     quote,
     attach: parsed.attach === "price_list" ? "price_list" : null,
+    referral: cleanReferral(parsed.referral),
   };
+}
+
+function cleanReferral(r) {
+  if (!r || typeof r !== "object") return null;
+  const f = (v) => String(v || "").replace(/\s+/g, " ").trim().slice(0, 120);
+  return { client_name: f(r.client_name), location: f(r.location), product: f(r.product), area: f(r.area) };
 }
 
 // Builds the row saved in wa_drafts. Extras (quotation, attachment) live in the "quote" column.
 function draftRow(waId, replyTo, draft) {
   const extras = draft.quote ? { ...draft.quote } : {};
   if (draft.attach) extras.attach = draft.attach;
+  if (draft.referral) extras.referral = draft.referral;
   return {
     wa_id: waId, reply_to: replyTo || null, body: draft.reply || "", needs_team: draft.needs_team,
     team_note: draft.team_note || null, ...(Object.keys(extras).length ? { quote: extras } : {}),
@@ -176,7 +194,7 @@ function draftRow(waId, replyTo, draft) {
 }
 
 function hasContent(draft) {
-  return Boolean(draft && (draft.reply || draft.needs_team || draft.quote || draft.attach));
+  return Boolean(draft && (draft.reply || draft.needs_team || draft.quote || draft.attach || draft.referral));
 }
 
 // Keep only sensible quotation lines; the team can still edit everything before sending.

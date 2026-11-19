@@ -70,6 +70,49 @@ async function learnFrom(waId, draft, sentText) {
   await setSetting("examples", list.slice(-30));
 }
 
+// ---- Layer referral template (Ravin) ----
+const REFERRAL_TEMPLATE = "layer_referral";
+const REFERRAL_BODY = "Hello bro, Paving Mauritius has just referred a client to you for laying.\nClient: {{1}}\nNumber: {{2}}\nLocation: {{3}}\nProduct: {{4}}\nArea: {{5}}\nThank you!";
+
+async function referralTemplateStatus() {
+  const data = await d360("/v1/configs/templates?limit=200");
+  const list = data?.waba_templates || data?.data || [];
+  const t = list.find((x) => x.name === REFERRAL_TEMPLATE);
+  return t ? { status: String(t.status || "submitted").toLowerCase(), category: t.category, language: t.language } : { status: "missing" };
+}
+
+async function createReferralTemplate() {
+  return d360("/v1/configs/templates", {
+    method: "POST",
+    body: {
+      name: REFERRAL_TEMPLATE, category: "UTILITY", language: "en", allow_category_change: true,
+      components: [{ type: "BODY", text: REFERRAL_BODY, example: { body_text: [["Jean Dupont", "+230 5762 9412", "Curepipe", "Pavers 200x100x60mm, Light Grey", "20 m2"]] } }],
+    },
+  });
+}
+
+// Tells Ravin about a client we referred. Template text can't contain line breaks or empty values.
+async function notifyRavin(waId, referral) {
+  const ravin = String(await getSetting("ravin_number", "") || "").replace(/\D/g, "");
+  if (!ravin) throw new Error("Ravin's number isn't saved in Setup");
+  const v = (t) => String(t || "").replace(/\s+/g, " ").trim().slice(0, 120) || "not given";
+  const local = waId.startsWith("230") ? waId.slice(3) : waId;
+  const phone = `+230 ${local.slice(0, 4)} ${local.slice(4)}`.trim();
+  const params = [v(referral.client_name), waId.startsWith("230") ? phone : `+${waId}`, v(referral.location), v(referral.product), v(referral.area)];
+  const data = await d360("/messages", {
+    method: "POST",
+    body: {
+      messaging_product: "whatsapp", recipient_type: "individual", to: ravin, type: "template",
+      template: { name: REFERRAL_TEMPLATE, language: { code: "en" }, components: [{ type: "body", parameters: params.map((text) => ({ type: "text", text })) }] },
+    },
+  });
+  const id = data?.messages?.[0]?.id || `local-${Date.now()}`;
+  await db().from("wa_contacts").upsert({ wa_id: ravin, name: "Ravin (layer)", is_staff: true }, { onConflict: "wa_id" });
+  const body = REFERRAL_BODY.replace(/\{\{(\d)\}\}/g, (_, n) => params[Number(n) - 1]);
+  await storeOut(ravin, id, "template", body);
+  return id;
+}
+
 // Sends one suggestion: its short messages in order, then the price list if attached.
 async function send(waId, body, draftId) {
   const parts = String(body || "").split(/\n---\n/).map((t) => t.trim()).filter(Boolean);
@@ -96,6 +139,12 @@ async function send(waId, body, draftId) {
       await storeOut(waId, id, "document", "[Document Price list.pdf]");
       ids.push(id);
     }
+    let warning = null;
+    let referralSent = false;
+    if (draft?.quote?.referral) {
+      try { await notifyRavin(waId, draft.quote.referral); referralSent = true; }
+      catch (e) { warning = `The client got Ravin's number, but Ravin couldn't be told: ${String(e.message || e)}`; await logEvent("referral_failed", { wa_id: waId, message: String(e.message || e) }); }
+    }
     const now = new Date().toISOString();
     const sentText = parts.join("\n---\n");
     await db().from("wa_contacts").update({ last_message_at: now, unread: 0 }).eq("wa_id", waId);
@@ -104,7 +153,7 @@ async function send(waId, body, draftId) {
       await db().from("wa_drafts").update({ status: "sent", body: sentText, decided_at: now }).eq("id", draftId);
       try { await learnFrom(waId, suggested, sentText); } catch { /* learning must never block sending */ }
     }
-    return { ok: true, ids };
+    return { ok: true, ids, warning, referral_sent: referralSent };
   } catch (err) {
     if (draftId) await db().from("wa_drafts").update({ error: String(err.message || err) }).eq("id", draftId);
     // 131047 = more than 24 hours since the client last wrote: WhatsApp only allows approved templates.
@@ -166,8 +215,11 @@ async function status(req) {
     out.bot_enabled = await getSetting("bot_enabled", true);
     out.staff_numbers = await getSetting("staff_numbers", []);
     out.examples = await getSetting("examples", []);
+    out.ravin_number = await getSetting("ravin_number", "");
     out.tables = true;
   } catch (err) { out.tables = false; out.table_error = String(err.message || err); }
+  try { out.referral_template = await referralTemplateStatus(); }
+  catch (err) { out.referral_template = { status: "unknown", error: String(err.message || err) }; }
   try {
     const hook = await d360("/v1/configs/webhook");
     out.webhook_url = hook?.url || null;
@@ -208,6 +260,21 @@ module.exports = async function handler(req, res) {
         await setSetting("staff_numbers", (Array.isArray(value) ? value : []).map(digits).filter(Boolean));
         return res.json({ ok: true });
       case "connect_webhook": return res.json(await connectWebhook(req));
+      case "ravin_number": {
+        const num = digits(value);
+        const full = num.length === 8 ? `230${num}` : num;
+        if (full.length < 10) throw new Error("Please enter Ravin's full number, e.g. 5xxx xxxx");
+        await setSetting("ravin_number", full);
+        const staff = await getSetting("staff_numbers", []);
+        const list = Array.isArray(staff) ? staff.map(digits) : [];
+        if (!list.includes(full)) await setSetting("staff_numbers", [...list, full]); // so the bot never answers him as a client
+        await db().from("wa_contacts").upsert({ wa_id: full, name: "Ravin (layer)", is_staff: true }, { onConflict: "wa_id" });
+        return res.json({ ok: true, ravin_number: full });
+      }
+      case "create_referral_template": {
+        const r = await createReferralTemplate();
+        return res.json({ ok: true, result: r });
+      }
       case "delete_example": {
         const list = await getSetting("examples", []);
         await setSetting("examples", (Array.isArray(list) ? list : []).filter((e) => e.at !== String(value || "")));
