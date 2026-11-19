@@ -42,7 +42,7 @@ async function getChat(waId) {
     db().from("wa_drafts").select("*").eq("wa_id", waId).eq("status", "pending").order("created_at", { ascending: false }).limit(1),
   ]);
   await db().from("wa_contacts").update({ unread: 0 }).eq("wa_id", waId);
-  return { contact, messages: (messages || []).reverse(), draft: drafts?.[0] || null };
+  return { contact, messages: (messages || []).reverse(), draft: drafts?.[0] || null, referral: await getReferral(waId) };
 }
 
 const LATE = "This client last wrote more than 24 hours ago, so WhatsApp won't let us send a normal message. Reply from the phone instead, or wait for the client to write again.";
@@ -71,59 +71,112 @@ async function learnFrom(waId, draft, sentText) {
 }
 
 // ---- Layer referral template (Ravin) ----
-// New name because a submitted template's wording can't be changed through the API.
-const REFERRAL_TEMPLATE = "layer_referral_payment";
-const REFERRAL_BODY = "Hello bro, Paving Mauritius has just referred a client to you for laying.\nClient: {{1}}\nNumber: {{2}}\nLocation: {{3}}\nProduct: {{4}}\nArea: {{5}}\nPayment: {{6}}\nThank you!";
-const PAYMENT_STATUSES = ["Not paid yet", "Deposit paid", "Half paid", "Fully paid"];
+// Two templates: the referral itself, then a payment update when the client pays.
+const TEMPLATES = {
+  referral: {
+    name: "layer_referral",
+    body: "Hello bro, Paving Mauritius has just referred a client to you for laying.\nClient: {{1}}\nNumber: {{2}}\nLocation: {{3}}\nProduct: {{4}}\nArea: {{5}}\nThank you!",
+    example: ["Jean Dupont", "+230 5762 9412", "Curepipe", "Pavers 200x100x60mm, Light Grey", "20 m2"],
+  },
+  payment: {
+    name: "layer_payment_update",
+    body: "Hello bro, payment update for the client we referred to you.\nClient: {{1}}\nNumber: {{2}}\nPayment: {{3}}\nArea given to us: {{4}}\nIf the area on site is different, please let us know before delivery. Thank you!",
+    example: ["Jean Dupont", "+230 5762 9412", "Paid in full", "20 m2"],
+  },
+};
+const PAYMENT_STATUSES = ["Deposit paid", "Half paid", "Fully paid"];
 
-async function referralTemplateStatus() {
+async function templateStatuses() {
   const data = await d360("/v1/configs/templates?limit=200");
   const list = data?.waba_templates || data?.data || [];
-  const t = list.find((x) => x.name === REFERRAL_TEMPLATE);
-  return t ? { status: String(t.status || "submitted").toLowerCase(), category: t.category, language: t.language } : { status: "missing" };
+  const out = {};
+  for (const [key, t] of Object.entries(TEMPLATES)) {
+    const found = list.find((x) => x.name === t.name);
+    out[key] = found ? String(found.status || "submitted").toLowerCase() : "missing";
+  }
+  return out;
 }
 
-async function createReferralTemplate() {
-  return d360("/v1/configs/templates", {
-    method: "POST",
-    body: {
-      name: REFERRAL_TEMPLATE, category: "UTILITY", language: "en", allow_category_change: true,
-      components: [{ type: "BODY", text: REFERRAL_BODY, example: { body_text: [["Jean Dupont", "+230 5762 9412", "Curepipe", "Pavers 200x100x60mm, Light Grey", "20 m2", "Deposit paid"]] } }],
-    },
-  });
+async function createMissingTemplates() {
+  const status = await templateStatuses();
+  const created = [];
+  for (const [key, t] of Object.entries(TEMPLATES)) {
+    if (status[key] !== "missing") continue;
+    await d360("/v1/configs/templates", {
+      method: "POST",
+      body: {
+        name: t.name, category: "UTILITY", language: "en", allow_category_change: true,
+        components: [{ type: "BODY", text: t.body, example: { body_text: [t.example] } }],
+      },
+    });
+    created.push(t.name);
+  }
+  return created;
 }
 
-// Tells Ravin about a client we referred. Template text can't contain line breaks or empty values.
-async function notifyRavin(waId, referral, payment) {
+const tplText = (t) => String(t || "").replace(/\s+/g, " ").trim().slice(0, 120) || "not given";
+function prettyNumber(waId) {
+  if (!waId.startsWith("230")) return `+${waId}`;
+  const local = waId.slice(3);
+  return `+230 ${local.slice(0, 4)} ${local.slice(4)}`.trim();
+}
+
+async function sendLayerTemplate(key, params) {
   const ravin = String(await getSetting("ravin_number", "") || "").replace(/\D/g, "");
   if (!ravin) throw new Error("Ravin's number isn't saved in Setup");
-  const v = (t) => String(t || "").replace(/\s+/g, " ").trim().slice(0, 120) || "not given";
-  const local = waId.startsWith("230") ? waId.slice(3) : waId;
-  const phone = `+230 ${local.slice(0, 4)} ${local.slice(4)}`.trim();
-  const params = [v(referral.client_name), waId.startsWith("230") ? phone : `+${waId}`, v(referral.location), v(referral.product), v(referral.area), v(payment)];
+  const t = TEMPLATES[key];
   const data = await d360("/messages", {
     method: "POST",
     body: {
       messaging_product: "whatsapp", recipient_type: "individual", to: ravin, type: "template",
-      template: { name: REFERRAL_TEMPLATE, language: { code: "en" }, components: [{ type: "body", parameters: params.map((text) => ({ type: "text", text })) }] },
+      template: { name: t.name, language: { code: "en" }, components: [{ type: "body", parameters: params.map((text) => ({ type: "text", text })) }] },
     },
   });
   const id = data?.messages?.[0]?.id || `local-${Date.now()}`;
   await db().from("wa_contacts").upsert({ wa_id: ravin, name: "Ravin (layer)", is_staff: true }, { onConflict: "wa_id" });
-  const body = REFERRAL_BODY.replace(/\{\{(\d)\}\}/g, (_, n) => params[Number(n) - 1]);
-  await storeOut(ravin, id, "template", body);
+  await storeOut(ravin, id, "template", t.body.replace(/\{\{(\d)\}\}/g, (_, n) => params[Number(n) - 1]));
   return id;
 }
 
+// Keeps a record of each referral (for the payment update and Ravin's commission).
+async function saveReferral(waId, referral) {
+  const list = await getSetting("referrals", []);
+  const rows = (Array.isArray(list) ? list : []).filter((r) => r.wa_id !== waId);
+  rows.push({ wa_id: waId, ...referral, referred_at: new Date().toISOString(), payments: [] });
+  await setSetting("referrals", rows.slice(-300));
+}
+
+async function getReferral(waId) {
+  const list = await getSetting("referrals", []);
+  return (Array.isArray(list) ? list : []).find((r) => r.wa_id === waId) || null;
+}
+
+async function sendPaymentUpdate(waId, status) {
+  if (!PAYMENT_STATUSES.includes(status)) throw new Error("Choose Deposit paid, Half paid or Fully paid");
+  const list = await getSetting("referrals", []);
+  const rows = Array.isArray(list) ? list : [];
+  const ref = rows.find((r) => r.wa_id === waId);
+  if (!ref) throw new Error("This client wasn't referred to Ravin from the Suite");
+  await sendLayerTemplate("payment", [tplText(ref.client_name), prettyNumber(waId), status, tplText(ref.area)]);
+  ref.payments = [...(ref.payments || []), { status, at: new Date().toISOString() }];
+  await setSetting("referrals", rows);
+  return ref;
+}
+
+// Tells Ravin about a client we referred (no payment info yet; that comes later as an update).
+async function notifyRavin(waId, referral) {
+  await sendLayerTemplate("referral", [tplText(referral.client_name), prettyNumber(waId), tplText(referral.location), tplText(referral.product), tplText(referral.area)]);
+  await saveReferral(waId, referral);
+}
+
 // Sends one suggestion: its short messages in order, then the price list if attached.
-async function send(waId, body, draftId, payment) {
+async function send(waId, body, draftId) {
   const parts = String(body || "").split(/\n---\n/).map((t) => t.trim()).filter(Boolean);
   let draft = null;
   if (draftId) ({ data: draft } = await db().from("wa_drafts").select("*").eq("id", draftId).maybeSingle());
   const attach = draft?.quote?.attach || null;
   const suggested = draft ? { body: draft.body } : null; // keep the bot's original wording
   if (!parts.length && !attach) throw new Error("Message is empty");
-  if (draft?.quote?.referral && !PAYMENT_STATUSES.includes(payment)) throw new Error("Choose the client's payment status for Ravin first");
   const ids = [];
   try {
     for (let i = 0; i < parts.length; i += 1) {
@@ -145,7 +198,7 @@ async function send(waId, body, draftId, payment) {
     let warning = null;
     let referralSent = false;
     if (draft?.quote?.referral) {
-      try { await notifyRavin(waId, draft.quote.referral, payment); referralSent = true; }
+      try { await notifyRavin(waId, draft.quote.referral); referralSent = true; }
       catch (e) { warning = `The client got Ravin's number, but Ravin couldn't be told: ${String(e.message || e)}`; await logEvent("referral_failed", { wa_id: waId, message: String(e.message || e) }); }
     }
     const now = new Date().toISOString();
@@ -221,8 +274,8 @@ async function status(req) {
     out.ravin_number = await getSetting("ravin_number", "");
     out.tables = true;
   } catch (err) { out.tables = false; out.table_error = String(err.message || err); }
-  try { out.referral_template = await referralTemplateStatus(); }
-  catch (err) { out.referral_template = { status: "unknown", error: String(err.message || err) }; }
+  try { out.templates = await templateStatuses(); }
+  catch (err) { out.templates = { error: String(err.message || err) }; }
   try {
     const hook = await d360("/v1/configs/webhook");
     out.webhook_url = hook?.url || null;
@@ -247,7 +300,8 @@ module.exports = async function handler(req, res) {
       case "status": return res.json(await status(req));
       case "chats": return res.json({ chats: await listChats(), bot_enabled: await getSetting("bot_enabled", true) });
       case "chat": return res.json(await getChat(waId));
-      case "send": return res.json(await send(waId, body, draftId, req.body.payment));
+      case "send": return res.json(await send(waId, body, draftId));
+      case "referral_payment": return res.json({ ok: true, referral: await sendPaymentUpdate(waId, value) });
       case "send_pdf": return res.json(await sendPdf(waId, { filename: req.body.filename, data: req.body.data, caption: body, draftId }));
       case "discard":
         await db().from("wa_drafts").update({ status: "discarded", decided_at: new Date().toISOString() }).eq("id", draftId);
@@ -274,10 +328,7 @@ module.exports = async function handler(req, res) {
         await db().from("wa_contacts").upsert({ wa_id: full, name: "Ravin (layer)", is_staff: true }, { onConflict: "wa_id" });
         return res.json({ ok: true, ravin_number: full });
       }
-      case "create_referral_template": {
-        const r = await createReferralTemplate();
-        return res.json({ ok: true, result: r });
-      }
+      case "create_referral_template": return res.json({ ok: true, created: await createMissingTemplates() });
       case "delete_example": {
         const list = await getSetting("examples", []);
         await setSetting("examples", (Array.isArray(list) ? list : []).filter((e) => e.at !== String(value || "")));
