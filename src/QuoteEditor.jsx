@@ -95,7 +95,7 @@ export default function QuoteEditor({quote,contact,caption,draftId,waId,api,onSe
       const doc=await makePdf(ref);
       await api("send_pdf",{
         wa_id:waId,filename:`${ref.replace(/\//g,"_")}.pdf`,data:toBase64(doc.output("arraybuffer")),
-        body:message,draft_id:draftId||null,
+        body:message,draft_id:draftId||null,ref,total,
       });
       if(!savedRef) await record(ref);
       onSent(ref);
@@ -111,6 +111,7 @@ export default function QuoteEditor({quote,contact,caption,draftId,waId,api,onSe
       const ref=savedRef||await nextRef();
       const doc=await makePdf(ref);
       if(!savedRef) await record(ref);
+      try{ await api("record_quote",{wa_id:waId,ref,total}); }catch{ /* only used for payment tracking */ }
       setSavedRef(ref);
       doc.save(`${ref.replace(/\//g,"_")}.pdf`);
     }catch(e){ setErr(e.message); }

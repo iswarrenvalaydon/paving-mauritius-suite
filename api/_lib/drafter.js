@@ -65,7 +65,7 @@ The usual conversation:
 Attachments from the client (photos and PDFs) come after the conversation, labelled to match it (for example [Photo 1]):
 - Sketches and plans: read every measurement, split the shape into rectangles, add them up, and ask the client to confirm your reading. If a side is missing or unreadable, ask for it.
 - Site photos: use them to understand the job, but never estimate an area from a photo alone; ask for measurements.
-- Payment proofs: put the amount, date, bank and reference in team_note and set needs_team. Never tell the client the payment is confirmed; just thank them and say the team will check it.
+- Payment proofs: fill "payment" with the amount in rupees (a number), date, bank and reference, mention them in team_note, and set needs_team. Never tell the client the payment is confirmed; just thank them and say the team will check it.
 - If an attachment could not be loaded, say so in team_note.
 
 Quotations ("quote"):
@@ -83,6 +83,7 @@ Client: ${contact?.name || contact?.profile_name || "unknown"} (+${contact?.wa_i
 Reply with ONLY a JSON object, no other text:
 {"messages": ["<short message>", "<short message>"], "needs_team": true|false, "team_note": "<short note or empty>", "attach": null | "price_list",
  "referral": null | {"client_name": "", "location": "", "product": "", "area": ""},
+ "payment": null | {"amount": 25000, "date": "", "bank": "", "reference": ""},
  "quote": null | {"client_name": "", "location": "", "summary": "", "caption": "Here is your quotation.", "items": [{"desc": "Pavers 200x100x60mm – Light Grey", "qty": 1000, "unit_price_incl_vat": 13.5}]}}`;
 }
 
@@ -178,7 +179,16 @@ async function draftReply(waId) {
     quote,
     attach: parsed.attach === "price_list" ? "price_list" : null,
     referral: cleanReferral(parsed.referral),
+    payment: cleanPayment(parsed.payment),
   };
+}
+
+function cleanPayment(p) {
+  if (!p || typeof p !== "object") return null;
+  const amount = Number(String(p.amount ?? "").replace(/[^\d.]/g, ""));
+  if (!amount || amount <= 0) return null;
+  const f = (v) => String(v || "").replace(/\s+/g, " ").trim().slice(0, 80);
+  return { amount: Math.round(amount * 100) / 100, date: f(p.date), bank: f(p.bank), reference: f(p.reference) };
 }
 
 function cleanReferral(r) {
@@ -192,6 +202,7 @@ function draftRow(waId, replyTo, draft) {
   const extras = draft.quote ? { ...draft.quote } : {};
   if (draft.attach) extras.attach = draft.attach;
   if (draft.referral) extras.referral = draft.referral;
+  if (draft.payment) extras.payment = draft.payment;
   return {
     wa_id: waId, reply_to: replyTo || null, body: draft.reply || "", needs_team: draft.needs_team,
     team_note: draft.team_note || null, ...(Object.keys(extras).length ? { quote: extras } : {}),
@@ -199,7 +210,7 @@ function draftRow(waId, replyTo, draft) {
 }
 
 function hasContent(draft) {
-  return Boolean(draft && (draft.reply || draft.needs_team || draft.quote || draft.attach || draft.referral));
+  return Boolean(draft && (draft.reply || draft.needs_team || draft.quote || draft.attach || draft.referral || draft.payment));
 }
 
 // Keep only sensible quotation lines; the team can still edit everything before sending.

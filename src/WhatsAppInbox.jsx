@@ -62,6 +62,7 @@ export default function WhatsAppInbox(){
   const [media,setMedia]=useState({});
   const [quoteOpen,setQuoteOpen]=useState(false);
   const [ravinInput,setRavinInput]=useState("");
+  const [payAmount,setPayAmount]=useState("");
   const draftIdRef=useRef(null);
   const bottomRef=useRef(null);
 
@@ -146,7 +147,7 @@ export default function WhatsAppInbox(){
   }
 
   function openChat(waId){
-    setSelected(waId); setChat(null); setView("chat"); setMedia({}); setQuoteOpen(false);
+    setSelected(waId); setChat(null); setView("chat"); setMedia({}); setQuoteOpen(false); setPayAmount("");
     draftIdRef.current=null; setDraftText(""); setManualText(""); setInfo("");
     loadChat(waId);
   }
@@ -370,19 +371,42 @@ export default function WhatsAppInbox(){
 
         <div style={{marginTop:12}}>{banner}</div>
 
-        {chat&&chat.referral&&(
-          <div style={{border:`1px solid ${BLUE}`,background:LIGHT_BLUE,borderRadius:10,padding:10,marginBottom:10,fontSize:13}}>
-            <div style={{fontWeight:700,color:BLUE}}>🤝 Referred to Ravin on {when(chat.referral.referred_at)}</div>
-            {(chat.referral.payments||[]).length>0&&<div style={{color:MID_GREY,marginTop:2}}>Updates sent: {chat.referral.payments.map(p=>`${p.status} (${when(p.at)})`).join(", ")}</div>}
-            <div style={{marginTop:6}}>Client paid? Tell Ravin:</div>
-            <div style={{display:"flex",gap:6,flexWrap:"wrap",marginTop:4}}>
-              {["Deposit paid","Half paid","Fully paid"].map(p=>(
-                <button key={p} disabled={busy} onClick={async()=>{ const r=await act("referral_payment",{wa_id:selected,value:p},`✅ Ravin told: ${p}`); if(r) loadChat(selected); }}
-                  style={btn("#fff",BLUE,{border:`1px solid ${BLUE}`,padding:"6px 10px",fontSize:12})}>{p}</button>
-              ))}
+        {chat&&(()=>{
+          const money=chat.money||{};
+          const proof=chat.draft&&chat.draft.quote&&chat.draft.quote.payment;
+          const show=proof||chat.referral||(money.payments&&money.payments.length)||money.quote;
+          if(!show) return null;
+          const amount=payAmount!==""?payAmount:(proof?String(proof.amount):"");
+          const after=money.quote&&Number(amount)>0?Math.round(((money.paid||0)+Number(amount))/money.quote.total*100):null;
+          return(
+            <div style={{border:`1px solid ${BLUE}`,background:LIGHT_BLUE,borderRadius:10,padding:10,marginBottom:10,fontSize:13}}>
+              <div style={{fontWeight:700,color:BLUE}}>💰 Payments</div>
+              {money.quote
+                ?<div>Quotation {money.quote.ref}: Rs {Number(money.quote.total).toLocaleString("en-MU",{minimumFractionDigits:2})} · paid so far: Rs {Number(money.paid||0).toLocaleString("en-MU")} ({money.pct||0}%)</div>
+                :<div style={{color:MID_GREY}}>No quotation total on record for this chat, so payments show in rupees, not %.</div>}
+              {proof&&<div style={{marginTop:4}}>The bot read a payment proof: <b>Rs {Number(proof.amount).toLocaleString("en-MU")}</b>{proof.bank?` · ${proof.bank}`:""}{proof.reference?` · ref ${proof.reference}`:""}{proof.date?` · ${proof.date}`:""}</div>}
+              {chat.referral&&<div style={{marginTop:4}}>🤝 Referred to Ravin on {when(chat.referral.referred_at)}{(chat.referral.payments||[]).length?` · told: ${chat.referral.payments.map(p=>p.status).join(", ")}`:""}</div>}
+              <div style={{marginTop:6}}>Check the bank, then confirm the amount received:</div>
+              <div style={{display:"flex",gap:6,alignItems:"center",flexWrap:"wrap",marginTop:4}}>
+                <span>Rs</span>
+                <input value={amount} onChange={e=>setPayAmount(e.target.value)} inputMode="decimal" placeholder="Amount"
+                  style={{width:120,padding:7,fontSize:14,borderRadius:6,border:"1px solid #ccc"}}/>
+                <button disabled={busy||!(Number(amount)>0)} onClick={async()=>{
+                  const r=await act("confirm_payment",{wa_id:selected,value:Number(amount),draft_id:chat.draft?chat.draft.id:null});
+                  if(r){
+                    const pct=r.pct!==null&&r.pct!==undefined?` (${r.pct}% paid)`:"";
+                    setInfo(`✅ Payment recorded${pct}${r.ravin==="told"?" and Ravin told":""}`);
+                    if(r.warning) setError(r.warning);
+                    setPayAmount(""); loadChat(selected);
+                  }
+                }} style={btn(GREEN,"#fff",{padding:"7px 12px",fontSize:13})}>
+                  ✅ Payment confirmed{after!==null?` · ${after}%`:""}
+                </button>
+              </div>
+              {chat.referral&&<div style={{fontSize:12,color:MID_GREY,marginTop:4}}>Ravin is told the new % automatically (not if it goes over 100%).</div>}
             </div>
-          </div>
-        )}
+          );
+        })()}
 
         {draft&&(
           <div style={{border:`2px solid ${draft.needs_team?ORANGE:GREEN}`,background:draft.needs_team?LIGHT_ORANGE:LIGHT_GREEN,borderRadius:10,padding:12,marginTop:4}}>

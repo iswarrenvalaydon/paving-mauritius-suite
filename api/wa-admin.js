@@ -42,7 +42,7 @@ async function getChat(waId) {
     db().from("wa_drafts").select("*").eq("wa_id", waId).eq("status", "pending").order("created_at", { ascending: false }).limit(1),
   ]);
   await db().from("wa_contacts").update({ unread: 0 }).eq("wa_id", waId);
-  return { contact, messages: (messages || []).reverse(), draft: drafts?.[0] || null, referral: await getReferral(waId) };
+  return { contact, messages: (messages || []).reverse(), draft: drafts?.[0] || null, referral: await getReferral(waId), money: await paymentSummary(waId) };
 }
 
 const LATE = "This client last wrote more than 24 hours ago, so WhatsApp won't let us send a normal message. Reply from the phone instead, or wait for the client to write again.";
@@ -151,8 +151,54 @@ async function getReferral(waId) {
   return (Array.isArray(list) ? list : []).find((r) => r.wa_id === waId) || null;
 }
 
+// ---- Quotation totals and confirmed payments, per client ----
+async function getMap(key) { const m = await getSetting(key, {}); return m && typeof m === "object" && !Array.isArray(m) ? m : {}; }
+
+async function recordQuote(waId, ref, total) {
+  const t = Number(total);
+  if (!ref || !(t > 0)) return;
+  const map = await getMap("quote_totals");
+  map[waId] = { ref: String(ref), total: Math.round(t * 100) / 100, at: new Date().toISOString() };
+  const keys = Object.keys(map);
+  if (keys.length > 500) keys.sort((a, b) => String(map[a].at).localeCompare(map[b].at)).slice(0, keys.length - 500).forEach((k) => delete map[k]);
+  await setSetting("quote_totals", map);
+}
+
+async function paymentSummary(waId) {
+  const [quotes, pays] = await Promise.all([getMap("quote_totals"), getMap("payments")]);
+  const quote = quotes[waId] || null;
+  const payments = Array.isArray(pays[waId]) ? pays[waId] : [];
+  const paid = payments.reduce((sum, p) => sum + Number(p.amount || 0), 0);
+  const pct = quote ? Math.round((paid / quote.total) * 100) : null;
+  return { quote, payments, paid: Math.round(paid * 100) / 100, pct };
+}
+
+// The team has checked the bank: record the payment and, if the client was referred, tell Ravin the %.
+async function confirmPayment(waId, amount, draftId) {
+  const amt = Math.round(Number(amount) * 100) / 100;
+  if (!(amt > 0)) throw new Error("Enter the amount received");
+  const pays = await getMap("payments");
+  pays[waId] = [...(Array.isArray(pays[waId]) ? pays[waId] : []), { amount: amt, at: new Date().toISOString() }];
+  await setSetting("payments", pays);
+  const summary = await paymentSummary(waId);
+  const ref = await getReferral(waId);
+  let ravin = "not_referred";
+  let warning = null;
+  if (ref) {
+    if (summary.pct !== null && summary.pct > 100) {
+      ravin = "held";
+      warning = `Payments add up to ${summary.pct}% of the quotation, more than the total. Ravin wasn't told; check the amounts.`;
+    } else {
+      const text = summary.pct !== null ? `${summary.pct}% paid` : `Rs ${summary.paid.toLocaleString("en-MU")} paid`;
+      try { await sendPaymentUpdate(waId, text); ravin = "told"; }
+      catch (e) { ravin = "failed"; warning = `Payment recorded, but Ravin couldn't be told: ${String(e.message || e)}`; }
+    }
+  }
+  return { ok: true, ...summary, ravin, warning };
+}
+
 async function sendPaymentUpdate(waId, status) {
-  if (!PAYMENT_STATUSES.includes(status)) throw new Error("Choose Deposit paid, Half paid or Fully paid");
+  if (!PAYMENT_STATUSES.includes(status) && !/(% paid|^Rs [\d,.]+ paid)$/.test(String(status))) throw new Error("Unknown payment status");
   const list = await getSetting("referrals", []);
   const rows = Array.isArray(list) ? list : [];
   const ref = rows.find((r) => r.wa_id === waId);
@@ -228,7 +274,7 @@ async function redraft(waId) {
 }
 
 // Sends a PDF made in the Suite (an approved quotation) to the client.
-async function sendPdf(waId, { filename, data, caption, draftId }) {
+async function sendPdf(waId, { filename, data, caption, draftId, ref, total }) {
   const name = String(filename || "Quotation.pdf").replace(/[^\w.\-]/g, "_");
   const buf = Buffer.from(String(data || ""), "base64");
   if (buf.length < 100 || buf.slice(0, 4).toString() !== "%PDF") throw new Error("The PDF could not be created");
@@ -302,7 +348,13 @@ module.exports = async function handler(req, res) {
       case "chat": return res.json(await getChat(waId));
       case "send": return res.json(await send(waId, body, draftId));
       case "referral_payment": return res.json({ ok: true, referral: await sendPaymentUpdate(waId, value) });
-      case "send_pdf": return res.json(await sendPdf(waId, { filename: req.body.filename, data: req.body.data, caption: body, draftId }));
+      case "send_pdf": {
+        const r = await sendPdf(waId, { filename: req.body.filename, data: req.body.data, caption: body, draftId });
+        try { await recordQuote(waId, req.body.ref, req.body.total); } catch { /* the quotation went out; the total is only for payment tracking */ }
+        return res.json(r);
+      }
+      case "record_quote": await recordQuote(waId, req.body.ref, req.body.total); return res.json({ ok: true });
+      case "confirm_payment": return res.json(await confirmPayment(waId, value, draftId));
       case "discard":
         await db().from("wa_drafts").update({ status: "discarded", decided_at: new Date().toISOString() }).eq("id", draftId);
         return res.json({ ok: true });
