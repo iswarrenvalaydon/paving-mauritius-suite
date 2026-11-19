@@ -61,7 +61,8 @@ export default function WhatsAppInbox(){
   const [filter,setFilter]=useState("all");
   const [media,setMedia]=useState({});
   const [quoteOpen,setQuoteOpen]=useState(false);
-  const [ravinInput,setRavinInput]=useState(""); // message id -> {url,mime} | {loading} | {error}
+  const [ravinInput,setRavinInput]=useState("");
+  const [payment,setPayment]=useState(""); // message id -> {url,mime} | {loading} | {error}
   const draftIdRef=useRef(null);
   const bottomRef=useRef(null);
 
@@ -146,7 +147,7 @@ export default function WhatsAppInbox(){
   }
 
   function openChat(waId){
-    setSelected(waId); setChat(null); setView("chat"); setMedia({}); setQuoteOpen(false);
+    setSelected(waId); setChat(null); setView("chat"); setMedia({}); setQuoteOpen(false); setPayment("");
     draftIdRef.current=null; setDraftText(""); setManualText(""); setInfo("");
     loadChat(waId);
   }
@@ -156,10 +157,10 @@ export default function WhatsAppInbox(){
     if(!text.replace(/-{3}/g,"").trim()&&!attach) return;
     setBusy(true); setError(""); setInfo("");
     try{
-      const r=await api("send",{wa_id:selected,body:text,draft_id:draftId||null});
+      const r=await api("send",{wa_id:selected,body:text,draft_id:draftId||null,payment});
       setInfo(r&&r.referral_sent?"✅ Sent, and Ravin has been told":"✅ Sent");
       if(r&&r.warning) setError(r.warning);
-      if(draftId){ draftIdRef.current=null; setDraftText(""); } else setManualText("");
+      if(draftId){ draftIdRef.current=null; setDraftText(""); setPayment(""); } else setManualText("");
       await loadChat(selected); loadChats();
     }catch(e){ setError(e.message); }
     setBusy(false);
@@ -387,10 +388,16 @@ export default function WhatsAppInbox(){
                 {draft.quote&&draft.quote.referral&&(
                   <div style={{fontSize:13,color:BLUE,marginBottom:6}}>
                     📨 Ravin will also get a message: {[draft.quote.referral.client_name||displayName(chat.contact),draft.quote.referral.location,draft.quote.referral.product,draft.quote.referral.area].filter(Boolean).join(" · ")}
+                    <div style={{marginTop:6,fontWeight:600}}>Client's payment, for Ravin:</div>
+                    <div style={{display:"flex",gap:6,flexWrap:"wrap",marginTop:4}}>
+                      {["Not paid yet","Deposit paid","Half paid","Fully paid"].map(p=>(
+                        <button key={p} onClick={()=>setPayment(p)} style={btn(payment===p?BLUE:"#fff",payment===p?"#fff":BLUE,{border:`1px solid ${BLUE}`,padding:"6px 10px",fontSize:12})}>{p}</button>
+                      ))}
+                    </div>
                   </div>
                 )}
                 <div style={{display:"flex",gap:8,flexWrap:"wrap",marginTop:4}}>
-                  <button onClick={()=>sendMessage(draftText,draft.id)} disabled={busy} style={btn(GREEN,"#fff")}>
+                  <button onClick={()=>sendMessage(draftText,draft.id)} disabled={busy||Boolean(draft.quote&&draft.quote.referral&&!payment)} style={btn(GREEN,"#fff")}>
                     {busy?"…":splitParts(draftText).filter(t=>t.trim()).length>1?`✅ Send ${splitParts(draftText).filter(t=>t.trim()).length} messages`:"✅ Send"}
                   </button>
                   <button onClick={()=>setDraftText(draftText+BREAK)} disabled={busy} style={btn("#fff",GREEN,{border:`1px solid ${GREEN}`,padding:"8px 12px",fontSize:13})}>+ Message</button>

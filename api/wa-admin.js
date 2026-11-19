@@ -71,8 +71,10 @@ async function learnFrom(waId, draft, sentText) {
 }
 
 // ---- Layer referral template (Ravin) ----
-const REFERRAL_TEMPLATE = "layer_referral";
-const REFERRAL_BODY = "Hello bro, Paving Mauritius has just referred a client to you for laying.\nClient: {{1}}\nNumber: {{2}}\nLocation: {{3}}\nProduct: {{4}}\nArea: {{5}}\nThank you!";
+// New name because a submitted template's wording can't be changed through the API.
+const REFERRAL_TEMPLATE = "layer_referral_payment";
+const REFERRAL_BODY = "Hello bro, Paving Mauritius has just referred a client to you for laying.\nClient: {{1}}\nNumber: {{2}}\nLocation: {{3}}\nProduct: {{4}}\nArea: {{5}}\nPayment: {{6}}\nThank you!";
+const PAYMENT_STATUSES = ["Not paid yet", "Deposit paid", "Half paid", "Fully paid"];
 
 async function referralTemplateStatus() {
   const data = await d360("/v1/configs/templates?limit=200");
@@ -86,19 +88,19 @@ async function createReferralTemplate() {
     method: "POST",
     body: {
       name: REFERRAL_TEMPLATE, category: "UTILITY", language: "en", allow_category_change: true,
-      components: [{ type: "BODY", text: REFERRAL_BODY, example: { body_text: [["Jean Dupont", "+230 5762 9412", "Curepipe", "Pavers 200x100x60mm, Light Grey", "20 m2"]] } }],
+      components: [{ type: "BODY", text: REFERRAL_BODY, example: { body_text: [["Jean Dupont", "+230 5762 9412", "Curepipe", "Pavers 200x100x60mm, Light Grey", "20 m2", "Deposit paid"]] } }],
     },
   });
 }
 
 // Tells Ravin about a client we referred. Template text can't contain line breaks or empty values.
-async function notifyRavin(waId, referral) {
+async function notifyRavin(waId, referral, payment) {
   const ravin = String(await getSetting("ravin_number", "") || "").replace(/\D/g, "");
   if (!ravin) throw new Error("Ravin's number isn't saved in Setup");
   const v = (t) => String(t || "").replace(/\s+/g, " ").trim().slice(0, 120) || "not given";
   const local = waId.startsWith("230") ? waId.slice(3) : waId;
   const phone = `+230 ${local.slice(0, 4)} ${local.slice(4)}`.trim();
-  const params = [v(referral.client_name), waId.startsWith("230") ? phone : `+${waId}`, v(referral.location), v(referral.product), v(referral.area)];
+  const params = [v(referral.client_name), waId.startsWith("230") ? phone : `+${waId}`, v(referral.location), v(referral.product), v(referral.area), v(payment)];
   const data = await d360("/messages", {
     method: "POST",
     body: {
@@ -114,13 +116,14 @@ async function notifyRavin(waId, referral) {
 }
 
 // Sends one suggestion: its short messages in order, then the price list if attached.
-async function send(waId, body, draftId) {
+async function send(waId, body, draftId, payment) {
   const parts = String(body || "").split(/\n---\n/).map((t) => t.trim()).filter(Boolean);
   let draft = null;
   if (draftId) ({ data: draft } = await db().from("wa_drafts").select("*").eq("id", draftId).maybeSingle());
   const attach = draft?.quote?.attach || null;
   const suggested = draft ? { body: draft.body } : null; // keep the bot's original wording
   if (!parts.length && !attach) throw new Error("Message is empty");
+  if (draft?.quote?.referral && !PAYMENT_STATUSES.includes(payment)) throw new Error("Choose the client's payment status for Ravin first");
   const ids = [];
   try {
     for (let i = 0; i < parts.length; i += 1) {
@@ -142,7 +145,7 @@ async function send(waId, body, draftId) {
     let warning = null;
     let referralSent = false;
     if (draft?.quote?.referral) {
-      try { await notifyRavin(waId, draft.quote.referral); referralSent = true; }
+      try { await notifyRavin(waId, draft.quote.referral, payment); referralSent = true; }
       catch (e) { warning = `The client got Ravin's number, but Ravin couldn't be told: ${String(e.message || e)}`; await logEvent("referral_failed", { wa_id: waId, message: String(e.message || e) }); }
     }
     const now = new Date().toISOString();
@@ -244,7 +247,7 @@ module.exports = async function handler(req, res) {
       case "status": return res.json(await status(req));
       case "chats": return res.json({ chats: await listChats(), bot_enabled: await getSetting("bot_enabled", true) });
       case "chat": return res.json(await getChat(waId));
-      case "send": return res.json(await send(waId, body, draftId));
+      case "send": return res.json(await send(waId, body, draftId, req.body.payment));
       case "send_pdf": return res.json(await sendPdf(waId, { filename: req.body.filename, data: req.body.data, caption: body, draftId }));
       case "discard":
         await db().from("wa_drafts").update({ status: "discarded", decided_at: new Date().toISOString() }).eq("id", draftId);
