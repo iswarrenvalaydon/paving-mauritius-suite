@@ -1,7 +1,7 @@
 // Everything the Suite's WhatsApp tab does goes through here, protected by the SUITE_PASSWORD
 // set in Vercel. The browser never sees the WhatsApp, Claude or Supabase secret keys.
 const { db, hookToken, safeEqual, d360, sendText, downloadMedia, uploadMedia, sendDocument, insertDraft, getSetting, setSetting, logEvent } = require("./_lib/common");
-const { draftReply } = require("./_lib/drafter");
+const { draftReply, draftRow } = require("./_lib/drafter");
 
 const digits = (s) => String(s || "").replace(/\D/g, "");
 const sleep = (ms) => new Promise((r) => setTimeout(r, ms));
@@ -45,26 +45,72 @@ async function getChat(waId) {
   return { contact, messages: (messages || []).reverse(), draft: drafts?.[0] || null };
 }
 
+const LATE = "This client last wrote more than 24 hours ago, so WhatsApp won't let us send a normal message. Reply from the phone instead, or wait for the client to write again.";
+const norm = (t) => String(t || "").replace(/\s+/g, " ").trim();
+
+function priceListUrl() {
+  const host = process.env.VERCEL_PROJECT_PRODUCTION_URL || "paving-mauritius-suite.vercel.app";
+  return `https://${host}/price-list.pdf`;
+}
+
+async function storeOut(waId, id, type, text) {
+  await db().from("wa_messages").upsert({
+    id, wa_id: waId, direction: "out", source: "suite", type, body: text, status: "sent", sent_at: new Date().toISOString(),
+  }, { onConflict: "id", ignoreDuplicates: true });
+}
+
+// When the team changes a suggestion before sending, keep the before/after so the bot learns from it.
+async function learnFrom(waId, draft, sentText) {
+  if (!draft || !draft.body || norm(draft.body) === norm(sentText)) return;
+  const { data: last } = await db().from("wa_messages").select("body").eq("wa_id", waId).eq("direction", "in").order("sent_at", { ascending: false }).limit(3);
+  const client = (last || []).reverse().map((m) => m.body).join(" / ");
+  const examples = await getSetting("examples", []);
+  const list = Array.isArray(examples) ? examples : [];
+  list.push({ client: client.slice(0, 400), bot: draft.body.replace(/\n---\n/g, " | ").slice(0, 600), team: String(sentText).replace(/\n---\n/g, " | ").slice(0, 600), at: new Date().toISOString() });
+  await setSetting("examples", list.slice(-30));
+}
+
+// Sends one suggestion: its short messages in order, then the price list if attached.
 async function send(waId, body, draftId) {
-  const text = String(body || "").trim();
-  if (!text) throw new Error("Message is empty");
+  const parts = String(body || "").split(/\n---\n/).map((t) => t.trim()).filter(Boolean);
+  let draft = null;
+  if (draftId) ({ data: draft } = await db().from("wa_drafts").select("*").eq("id", draftId).maybeSingle());
+  const attach = draft?.quote?.attach || null;
+  const suggested = draft ? { body: draft.body } : null; // keep the bot's original wording
+  if (!parts.length && !attach) throw new Error("Message is empty");
+  const ids = [];
   try {
-    const id = await sendText(waId, text);
-    await db().from("wa_messages").upsert({
-      id, wa_id: waId, direction: "out", source: "suite", type: "text", body: text, status: "sent", sent_at: new Date().toISOString(),
-    }, { onConflict: "id", ignoreDuplicates: true });
-    await db().from("wa_contacts").update({ last_message_at: new Date().toISOString(), unread: 0 }).eq("wa_id", waId);
-    await db().from("wa_drafts").update({ status: "superseded", decided_at: new Date().toISOString() })
-      .eq("wa_id", waId).eq("status", "pending").neq("id", draftId || 0);
-    if (draftId) await db().from("wa_drafts").update({ status: "sent", body: text, decided_at: new Date().toISOString() }).eq("id", draftId);
-    return { ok: true, id };
+    for (let i = 0; i < parts.length; i += 1) {
+      if (i > 0) await sleep(1500); // a natural gap between messages
+      const id = await sendText(waId, parts[i]);
+      await storeOut(waId, id, "text", parts[i]);
+      ids.push(id);
+    }
+    if (attach === "price_list") {
+      if (parts.length) await sleep(1000);
+      const data = await d360("/messages", {
+        method: "POST",
+        body: { messaging_product: "whatsapp", recipient_type: "individual", to: waId, type: "document", document: { link: priceListUrl(), filename: "Paving Mauritius - Price list.pdf" } },
+      });
+      const id = data?.messages?.[0]?.id || `local-${Date.now()}`;
+      await storeOut(waId, id, "document", "[Document Price list.pdf]");
+      ids.push(id);
+    }
+    const now = new Date().toISOString();
+    const sentText = parts.join("\n---\n");
+    await db().from("wa_contacts").update({ last_message_at: now, unread: 0 }).eq("wa_id", waId);
+    await db().from("wa_drafts").update({ status: "superseded", decided_at: now }).eq("wa_id", waId).eq("status", "pending").neq("id", draftId || 0);
+    if (draftId) {
+      await db().from("wa_drafts").update({ status: "sent", body: sentText, decided_at: now }).eq("id", draftId);
+      try { await learnFrom(waId, suggested, sentText); } catch { /* learning must never block sending */ }
+    }
+    return { ok: true, ids };
   } catch (err) {
     if (draftId) await db().from("wa_drafts").update({ error: String(err.message || err) }).eq("id", draftId);
     // 131047 = more than 24 hours since the client last wrote: WhatsApp only allows approved templates.
     const late = JSON.stringify(err.data || "").includes("131047");
-    throw new Error(late
-      ? "This client last wrote more than 24 hours ago, so WhatsApp won't let us send a normal message. Reply from the phone instead, or wait for the client to write again."
-      : String(err.message || err));
+    const partly = ids.length ? ` (${ids.length} message${ids.length > 1 ? "s" : ""} already went out.)` : "";
+    throw new Error((late ? LATE : String(err.message || err)) + partly);
   }
 }
 
@@ -73,10 +119,7 @@ async function redraft(waId) {
   if (!draft) throw new Error("No messages in this chat yet");
   await db().from("wa_drafts").update({ status: "superseded", decided_at: new Date().toISOString() }).eq("wa_id", waId).eq("status", "pending");
   const { data: last } = await db().from("wa_messages").select("id").eq("wa_id", waId).eq("direction", "in").order("sent_at", { ascending: false }).limit(1);
-  return insertDraft({
-    wa_id: waId, reply_to: last?.[0]?.id || null, body: draft.reply, needs_team: draft.needs_team, team_note: draft.team_note || null,
-    ...(draft.quote ? { quote: draft.quote } : {}),
-  });
+  return insertDraft(draftRow(waId, last?.[0]?.id, draft));
 }
 
 // Sends a PDF made in the Suite (an approved quotation) to the client.
@@ -122,6 +165,7 @@ async function status(req) {
     if (error) throw new Error(error.message);
     out.bot_enabled = await getSetting("bot_enabled", true);
     out.staff_numbers = await getSetting("staff_numbers", []);
+    out.examples = await getSetting("examples", []);
     out.tables = true;
   } catch (err) { out.tables = false; out.table_error = String(err.message || err); }
   try {
@@ -164,6 +208,11 @@ module.exports = async function handler(req, res) {
         await setSetting("staff_numbers", (Array.isArray(value) ? value : []).map(digits).filter(Boolean));
         return res.json({ ok: true });
       case "connect_webhook": return res.json(await connectWebhook(req));
+      case "delete_example": {
+        const list = await getSetting("examples", []);
+        await setSetting("examples", (Array.isArray(list) ? list : []).filter((e) => e.at !== String(value || "")));
+        return res.json({ ok: true });
+      }
       case "media": {
         const { data: msg } = await db().from("wa_messages").select("media_id").eq("id", String(req.body.message_id || "")).maybeSingle();
         if (!msg?.media_id) throw new Error("No photo or file on this message");

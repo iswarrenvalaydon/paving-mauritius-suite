@@ -12,9 +12,12 @@ const RANGE = [
 ];
 const COLOURS = ["Dark Grey", "Red", "Terracotta"];
 
-export const PRODUCT_OPTIONS = RANGE.flatMap((p) => [
-  { desc: `${p.name} – Light Grey`, price: p.lightGrey, perM2: p.perM2 },
-  ...(p.colours === null ? [] : COLOURS.map((c) => ({ desc: `${p.name} – ${c}`, price: p.colours, perM2: p.perM2 }))),
-]);
+export const PRODUCT_OPTIONS = [
+  ...RANGE.flatMap((p) => [
+    { desc: `${p.name} – Light Grey`, price: p.lightGrey, perM2: p.perM2 },
+    ...(p.colours === null ? [] : COLOURS.map((c) => ({ desc: `${p.name} – ${c}`, price: p.colours, perM2: p.perM2 }))),
+  ]),
+  { desc: "Kerb 450x200x125mm – Light Grey", price: 150.00, perM2: null },
+];
 
 export const VAT_RATE = 0.15;

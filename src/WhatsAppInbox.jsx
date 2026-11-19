@@ -26,6 +26,10 @@ function when(iso){
     ? d.toLocaleTimeString("en-GB",{hour:"2-digit",minute:"2-digit",timeZone:"Indian/Mauritius"})
     : d.toLocaleDateString("en-GB",{day:"2-digit",month:"short",timeZone:"Indian/Mauritius"})+" "+d.toLocaleTimeString("en-GB",{hour:"2-digit",minute:"2-digit",timeZone:"Indian/Mauritius"});
 }
+const BREAK="\n---\n"; // the short messages of one suggestion are joined with this
+function splitParts(t){ const p=String(t||"").split(/\n---\n/); return p.length?p:[""]; }
+function hasQuote(d){ return Boolean(d&&d.quote&&Array.isArray(d.quote.items)&&d.quote.items.length); }
+
 function displayName(c){
   if(!c) return "";
   return c.name||c.profile_name||("+"+c.wa_id);
@@ -147,7 +151,8 @@ export default function WhatsAppInbox(){
   }
 
   async function sendMessage(text,draftId){
-    if(!text.trim()) return;
+    const attach=Boolean(draftId&&chat&&chat.draft&&chat.draft.quote&&chat.draft.quote.attach);
+    if(!text.replace(/-{3}/g,"").trim()&&!attach) return;
     setBusy(true); setError(""); setInfo("");
     try{
       await api("send",{wa_id:selected,body:text,draft_id:draftId||null});
@@ -270,6 +275,18 @@ export default function WhatsAppInbox(){
                 {busy?"Connecting…":"Connect WhatsApp to the Suite"}
               </button>
             )}
+            <div style={{marginTop:18,fontWeight:700,color:BLUE,fontSize:14}}>What the bot learned from your corrections</div>
+            <div style={{fontSize:12,color:MID_GREY,marginBottom:6}}>When you change a suggestion before sending, the bot keeps the example and follows it for all clients. Delete any that shouldn't become a habit.</div>
+            {(!setup.examples||!setup.examples.length)&&<div style={{fontSize:13,color:MID_GREY}}>None yet.</div>}
+            {(setup.examples||[]).slice().reverse().map(ex=>(
+              <div key={ex.at} style={{border:"1px solid #eee",borderRadius:8,padding:8,marginBottom:6,fontSize:12}}>
+                <div><b>Client:</b> {ex.client}</div>
+                <div style={{color:"#B00020"}}><b>Bot:</b> {ex.bot}</div>
+                <div style={{color:GREEN}}><b>You sent:</b> {ex.team}</div>
+                <button onClick={async()=>{ const r=await act("delete_example",{value:ex.at},"Example deleted"); if(r) openSetup(); }} disabled={busy}
+                  style={btn("#fff","#B00020",{border:"1px solid #B00020",padding:"4px 10px",fontSize:12,marginTop:4})}>Delete</button>
+              </div>
+            ))}
             <div style={{marginTop:16,fontSize:12,color:MID_GREY}}>
               Staff numbers (no bot replies): {(setup.staff_numbers||[]).map(n=>"+"+n).join(", ")||"none"}
             </div>
@@ -332,16 +349,27 @@ export default function WhatsAppInbox(){
               {draft.needs_team?"⚠️ Bot suggestion – needs your decision":"🤖 Bot suggestion – check and send"}
             </div>
             {draft.team_note&&<div style={{fontSize:13,color:"#333",marginBottom:8}}><b>Note for the team:</b> {draft.team_note}</div>}
-            {draft.quote?(
-              <QuoteEditor key={draft.id} quote={draft.quote} contact={chat.contact} caption={draft.body} draftId={draft.id}
+            {hasQuote(draft)?(
+              <QuoteEditor key={draft.id} quote={draft.quote} contact={chat.contact} caption={draft.quote.caption||""} draftId={draft.id}
                 waId={selected} api={api} onSent={quoteSent}/>
             ):(
               <>
-                <textarea value={draftText} onChange={e=>setDraftText(e.target.value)} rows={Math.min(10,Math.max(3,draftText.split("\n").length+1))}
-                  placeholder="(The bot suggests no reply. Write one here if needed.)"
-                  style={{width:"100%",boxSizing:"border-box",padding:10,fontSize:14,borderRadius:8,border:"1px solid #ccc",fontFamily:"inherit"}}/>
-                <div style={{display:"flex",gap:8,flexWrap:"wrap",marginTop:8}}>
-                  <button onClick={()=>sendMessage(draftText,draft.id)} disabled={busy||!draftText.trim()} style={btn(GREEN,"#fff")}>{busy?"…":"✅ Send"}</button>
+                {splitParts(draftText).map((part,i,all)=>(
+                  <div key={i} style={{display:"flex",gap:6,alignItems:"flex-start",marginBottom:6}}>
+                    <textarea value={part} rows={Math.min(8,Math.max(2,Math.ceil(part.length/38)))}
+                      onChange={e=>{ const p=[...all]; p[i]=e.target.value; setDraftText(p.join(BREAK)); }}
+                      placeholder={all.length===1?"(The bot suggests no reply. Write one here if needed.)":"Message"}
+                      style={{flex:1,boxSizing:"border-box",padding:10,fontSize:14,borderRadius:8,border:"1px solid #ccc",fontFamily:"inherit",background:"#fff"}}/>
+                    {all.length>1&&<button onClick={()=>setDraftText(all.filter((_,j)=>j!==i).join(BREAK))} title="Remove this message"
+                      style={btn("#fff","#B00020",{padding:"6px 9px",border:"1px solid #B00020"})}>✖</button>}
+                  </div>
+                ))}
+                {draft.quote&&draft.quote.attach==="price_list"&&<div style={{fontSize:13,color:BLUE,marginBottom:6}}>📎 The price list PDF is sent after the message.</div>}
+                <div style={{display:"flex",gap:8,flexWrap:"wrap",marginTop:4}}>
+                  <button onClick={()=>sendMessage(draftText,draft.id)} disabled={busy} style={btn(GREEN,"#fff")}>
+                    {busy?"…":splitParts(draftText).filter(t=>t.trim()).length>1?`✅ Send ${splitParts(draftText).filter(t=>t.trim()).length} messages`:"✅ Send"}
+                  </button>
+                  <button onClick={()=>setDraftText(draftText+BREAK)} disabled={busy} style={btn("#fff",GREEN,{border:`1px solid ${GREEN}`,padding:"8px 12px",fontSize:13})}>+ Message</button>
                 </div>
               </>
             )}
@@ -358,9 +386,9 @@ export default function WhatsAppInbox(){
           <div style={{display:"flex",gap:8,flexWrap:"wrap",marginTop:6}}>
             <button onClick={()=>sendMessage(manualText,null)} disabled={busy||!manualText.trim()} style={btn(BLUE,"#fff")}>Send my message</button>
             {!draft&&<button onClick={redraft} disabled={busy} style={btn("#fff",BLUE,{border:`1px solid ${BLUE}`})}>🤖 Ask the bot for a reply</button>}
-            {!(draft&&draft.quote)&&!quoteOpen&&<button onClick={()=>setQuoteOpen(true)} disabled={busy} style={btn("#fff",BLUE,{border:`1px solid ${BLUE}`})}>📄 Make a quotation</button>}
+            {!hasQuote(draft)&&!quoteOpen&&<button onClick={()=>setQuoteOpen(true)} disabled={busy} style={btn("#fff",BLUE,{border:`1px solid ${BLUE}`})}>📄 Make a quotation</button>}
           </div>
-          {quoteOpen&&!(draft&&draft.quote)&&chat&&(
+          {quoteOpen&&!hasQuote(draft)&&chat&&(
             <QuoteEditor key="manual" quote={null} contact={chat.contact} caption="" draftId={null}
               waId={selected} api={api} onSent={quoteSent} onCancel={()=>setQuoteOpen(false)}/>
           )}

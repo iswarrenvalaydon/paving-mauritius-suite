@@ -2,7 +2,7 @@
 // client messages, replies typed on the business phone (echoes), history sync and contacts.
 // It stores them in Supabase and asks Claude for a suggested reply. It never sends anything.
 const { db, hookToken, safeEqual, getSetting, logEvent, insertDraft } = require("./_lib/common");
-const { draftReply } = require("./_lib/drafter");
+const { draftReply, draftRow, hasContent } = require("./_lib/drafter");
 
 let waitUntil = null;
 try { ({ waitUntil } = require("@vercel/functions")); } catch { waitUntil = null; }
@@ -94,12 +94,9 @@ async function draftFor(waId, triggerId) {
     const draft = await draftReply(waId);
     last = await latest();
     if (!draft || !last || last.id !== triggerId) return;
-    if (!draft.reply && !draft.needs_team && !draft.quote) return;
+    if (!hasContent(draft)) return;
     await supersedeDrafts(waId);
-    await insertDraft({
-      wa_id: waId, reply_to: triggerId, body: draft.reply, needs_team: draft.needs_team, team_note: draft.team_note || null,
-      ...(draft.quote ? { quote: draft.quote } : {}),
-    });
+    await insertDraft(draftRow(waId, triggerId, draft));
   } catch (err) {
     await logEvent("draft_error", { wa_id: waId, message: String(err?.message || err) });
     await db().from("wa_drafts").insert({
