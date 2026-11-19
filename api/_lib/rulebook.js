@@ -127,7 +127,8 @@ You can read a Google Maps pin or a town name and work out the area.
 - Email: info@paving.mu
 - Website: paving.mu
 - Facebook page: https://www.facebook.com/share/1C8KUnP9kE/
-- Factory: 138 New Industrial Zone, La Tour Koenig, Pointe aux Sables. For a map pin, set needs_team (the team sends it).
+- Factory: 138 New Industrial Zone, La Tour Koenig, Pointe aux Sables.
+- Location on Google Maps (send it when a client asks where we are, or before a visit or collection), on its own line: https://maps.app.goo.gl/e2aX92fbprRjQi1p9
 `;
 
 module.exports = { RULEBOOK };

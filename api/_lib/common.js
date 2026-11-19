@@ -53,7 +53,8 @@ async function d360(path, { method = "GET", body } = {}) {
 async function sendText(to, body) {
   const data = await d360("/messages", {
     method: "POST",
-    body: { messaging_product: "whatsapp", recipient_type: "individual", to, type: "text", text: { body, preview_url: false } },
+    // Show the link preview (map picture, Facebook page) whenever the message contains a link.
+    body: { messaging_product: "whatsapp", recipient_type: "individual", to, type: "text", text: { body, preview_url: /https?:\/\//i.test(body) } },
   });
   return data?.messages?.[0]?.id || `local-${Date.now()}`;
 }
