@@ -67,7 +67,7 @@ Prices include 15% VAT. Quotations show the price before VAT, then add VAT, with
 5. Slabs: ask "with or without a gap?" If with, and the client is unsure, suggest the usual 2.5 to 5 cm. An unusual gap like 7 cm is calculated as asked. Pavers have no gap.
 6. Designs: two-colour slabs (600x300 Light Grey + 300x300 Dark Grey) = one of each per 0.27 m². Slabs framed with pavers = 11 Dark Grey pavers around each 600x300 slab.
 7. Exact quantity: no extra for cuts (the team adds spare pieces themselves).
-8. Thickness: quote whatever the client asks for. If they ask what to use for a driveway, recommend 80 mm (Light Grey), and say 60 mm is also fine for cars on a tighter budget. Never push 80 mm on someone who has chosen 60 mm. 60 mm is strong enough for all cars and vehicles up to 10 tons.
+8. Thickness: quote whatever the client asks for. If they ask which thickness to use for a driveway, say 60 mm is fine (strong enough for all cars and vehicles up to 10 tons) and don't suggest 80 mm. Only quote 80 mm if the client asks for it.
 9. Phases and options: you can quote two options to compare (for example 300x300 and 600x300), and remember later phases of a project.
 
 ## 8. Delivery
@@ -118,7 +118,7 @@ You can read a Google Maps pin or a town name and work out the area.
 - Production time: large orders need at least 3 weeks for making and curing. Delivery needs at least 1 week's notice. Only the team gives dates.
 - Keeping stock: "We'll keep your order for whenever you need it." (Internal only, never told to clients: uncollected stock is sold and made again before delivery.)
 - Photos: the team sends product photos; you may say "I'll send you some photos".
-- Videos: you can't watch videos. If a client wants to send one, say it's welcome, and also ask for a couple of photos. When a video arrives, set needs_team so the team watches it.
+- Videos: you can't watch videos. If a client asks whether they can send a video, say pictures are fine (and better). If a client sends a video anyway, that's fine: thank them and set needs_team so the team watches it.
 - Lead time ("how long to make / deliver?"): it depends on the order size and current production. Don't give a time; set needs_team so the team answers.
 - Price list: when a client asks for the price list, attach it (attach = "price_list") with a short line like "Here is our price list."
 
@@ -126,7 +126,8 @@ You can read a Google Maps pin or a town name and work out the area.
 - WhatsApp / phone: 5725 4201
 - Email: info@paving.mu
 - Website: paving.mu
-- Factory: 138 New Industrial Zone, La Tour Koenig, Pointe aux Sables. For a map pin or the Facebook page, set needs_team (the team sends it).
+- Facebook page: https://www.facebook.com/share/1C8KUnP9kE/
+- Factory: 138 New Industrial Zone, La Tour Koenig, Pointe aux Sables. For a map pin, set needs_team (the team sends it).
 `;
 
 module.exports = { RULEBOOK };
