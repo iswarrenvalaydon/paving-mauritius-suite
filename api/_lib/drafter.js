@@ -21,11 +21,16 @@ ${list.map((e, i) => `${i + 1}. Client: ${String(e.client || "").slice(0, 300)}
 }
 
 function referralText(ravin) {
+  const local = ravin.startsWith("230") ? `${ravin.slice(3, 7)} ${ravin.slice(7)}` : `+${ravin}`;
   if (!ravin) return `
 Layer referral: Ravin's number isn't set up yet. If the client wants a layer's number, set needs_team with the note "Send Ravin's number".
 `;
   return `
-Layer referral: our main layer is Ravin, WhatsApp +${ravin}. When the client says yes to a layer's number, send it in a short message (e.g. "Here is Ravin's number: +${ravin}. He's one of the good layers we work with.") and fill "referral" with what you know about the client: client_name, location (area, town or address), product and area (m²). Leave a field empty if unknown. The team approves, and Ravin automatically gets a message with these details.
+Layer referral: our main layer is Ravin. When the client says yes to a layer's number, send exactly this, in the client's language (number written as ${local}):
+- English: "Please call Ravin on ${local} and tell him Paving Mauritius Ltd referred you. He will do the needful for you."
+- French: "Veuillez appeler Ravin au ${local} et dites-lui que c'est Paving Mauritius Ltd qui vous a référé. Il va faire le nécessaire pour vous."
+- Creole: "Svp apel Ravin lor ${local} ek dir li ki Paving Mauritius Ltd ki finn refer ou. Li pou fer le nécessaire pou ou."
+Then fill "referral" with what you know about the client: client_name, location (area, town or address), product and area (m²). Leave a field empty if unknown. The team approves, and Ravin automatically gets a message with these details.
 `;
 }
 
