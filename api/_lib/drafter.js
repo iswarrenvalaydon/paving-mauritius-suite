@@ -80,7 +80,7 @@ ${referralText(ravin)}${examplesText(examples)}
 Current time in Mauritius: ${now}.
 Client: ${contact?.name || contact?.profile_name || "unknown"} (+${contact?.wa_id || ""}).
 
-Reply with ONLY a JSON object, no other text:
+Give your answer by calling the draft_reply tool (never as plain text). Its fields:
 {"messages": ["<short message>", "<short message>"], "needs_team": true|false, "team_note": "<short note or empty>", "attach": null | "price_list",
  "referral": null | {"client_name": "", "location": "", "product": "", "area": ""},
  "payment": null | {"amount": 25000, "date": "", "bank": "", "reference": ""},
@@ -127,6 +127,40 @@ async function mediaBlocks(messages) {
   return { labels, blocks };
 }
 
+// The bot answers through a tool with a fixed shape, so its reply always comes back complete and readable.
+const STR = { type: "string" };
+const DRAFT_TOOL = {
+  name: "draft_reply",
+  description: "Return the suggested WhatsApp reply for the team to approve.",
+  input_schema: {
+    type: "object",
+    properties: {
+      messages: { type: "array", items: STR, description: "1 to 3 short messages to send, in order. Empty if no reply is needed." },
+      needs_team: { type: "boolean" },
+      team_note: { type: "string", description: "Short note for the team in English, or empty." },
+      attach: { type: "string", enum: ["none", "price_list"] },
+      referral: { type: "object", properties: { client_name: STR, location: STR, product: STR, area: STR } },
+      payment: { type: "object", properties: { amount: { type: "number" }, date: STR, bank: STR, reference: STR } },
+      quote: {
+        type: "object",
+        properties: {
+          client_name: STR, location: STR, summary: STR, caption: STR,
+          items: { type: "array", items: { type: "object", properties: { desc: STR, qty: { type: "number" }, unit_price_incl_vat: { type: "number" } }, required: ["desc", "qty", "unit_price_incl_vat"] } },
+        },
+      },
+    },
+    required: ["messages", "needs_team", "team_note"],
+  },
+};
+
+// Last resort if the answer came back as text: pull the messages out so the team never sees raw code.
+function salvage(text) {
+  const m = text.match(/"messages"\s*:\s*\[([\s\S]*?)\]/);
+  if (!m) return null;
+  const parts = [...m[1].matchAll(/"((?:[^"\\]|\\.)*)"/g)].map((x) => { try { return JSON.parse(`"${x[1]}"`); } catch { return x[1]; } });
+  return parts.length ? { messages: parts } : null;
+}
+
 function parseJson(text) {
   const start = text.indexOf("{");
   const end = text.lastIndexOf("}");
@@ -157,16 +191,24 @@ async function draftReply(waId) {
     headers: { "x-api-key": key, "anthropic-version": "2023-06-01", "content-type": "application/json" },
     body: JSON.stringify({
       model: MODEL,
-      max_tokens: 1500,
+      max_tokens: 4000,
+      tools: [DRAFT_TOOL],
+      tool_choice: { type: "tool", name: "draft_reply" },
       system: systemPrompt(typeof rulebook === "string" ? rulebook : RULEBOOK, contact, examples, String(ravin || "").replace(/\D/g, "")),
       messages: [{ role: "user", content }],
     }),
   });
   const data = await res.json();
   if (!res.ok) throw new Error(`Claude: ${data?.error?.message || res.status}`);
+  const toolUse = (data.content || []).find((c) => c.type === "tool_use" && c.name === "draft_reply");
   const text = (data.content || []).filter((c) => c.type === "text").map((c) => c.text).join("");
-  const parsed = parseJson(text);
-  if (!parsed) return { reply: text.trim(), needs_team: true, team_note: "The bot's answer was not in the expected format; please check it.", quote: null, attach: null };
+  let parsed = toolUse?.input || parseJson(text);
+  if (!parsed) {
+    const saved = salvage(text);
+    if (!saved) return { reply: "", needs_team: true, team_note: "The bot couldn't write a proper suggestion this time. Tap ↻ New suggestion or answer yourself.", quote: null, attach: null };
+    parsed = { ...saved, needs_team: true, team_note: "The bot's answer was cut short; check it before sending." };
+  }
+  if (data.stop_reason === "max_tokens" && toolUse) parsed = { ...parsed, needs_team: true, team_note: [parsed.team_note, "(The bot's answer was cut short; check it.)"].filter(Boolean).join(" ") };
   const quote = cleanQuote(parsed.quote);
   const parts = (Array.isArray(parsed.messages) ? parsed.messages : [parsed.reply])
     .map((m) => String(m || "").replace(/\n-{3,}\n/g, "\n").trim())
@@ -194,7 +236,8 @@ function cleanPayment(p) {
 function cleanReferral(r) {
   if (!r || typeof r !== "object") return null;
   const f = (v) => String(v || "").replace(/\s+/g, " ").trim().slice(0, 120);
-  return { client_name: f(r.client_name), location: f(r.location), product: f(r.product), area: f(r.area) };
+  const out = { client_name: f(r.client_name), location: f(r.location), product: f(r.product), area: f(r.area) };
+  return Object.values(out).some(Boolean) ? out : null; // an empty object means "no referral"
 }
 
 // Builds the row saved in wa_drafts. Extras (quotation, attachment) live in the "quote" column.
