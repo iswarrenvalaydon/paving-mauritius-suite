@@ -80,7 +80,7 @@ ${referralText(ravin)}${examplesText(examples)}
 Current time in Mauritius: ${now}.
 Client: ${contact?.name || contact?.profile_name || "unknown"} (+${contact?.wa_id || ""}).
 
-Give your answer by calling the draft_reply tool (never as plain text). Its fields:
+Reply with ONLY a JSON object, no other text:
 {"messages": ["<short message>", "<short message>"], "needs_team": true|false, "team_note": "<short note or empty>", "attach": null | "price_list",
  "referral": null | {"client_name": "", "location": "", "product": "", "area": ""},
  "payment": null | {"amount": 25000, "date": "", "bank": "", "reference": ""},
@@ -192,8 +192,6 @@ async function draftReply(waId) {
     body: JSON.stringify({
       model: MODEL,
       max_tokens: 4000,
-      tools: [DRAFT_TOOL],
-      tool_choice: { type: "tool", name: "draft_reply" },
       system: systemPrompt(typeof rulebook === "string" ? rulebook : RULEBOOK, contact, examples, String(ravin || "").replace(/\D/g, "")),
       messages: [{ role: "user", content }],
     }),

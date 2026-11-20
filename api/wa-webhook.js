@@ -101,7 +101,7 @@ async function draftFor(waId, triggerId) {
     await logEvent("draft_error", { wa_id: waId, message: String(err?.message || err) });
     await db().from("wa_drafts").insert({
       wa_id: waId, reply_to: triggerId, body: "", needs_team: true, status: "pending",
-      team_note: "The bot could not write a reply this time. Please answer this client yourself.", error: String(err?.message || err),
+      team_note: `The bot could not write a reply this time. Please answer this client yourself. (Reason: ${String(err?.message || err).slice(0, 200)})`, error: String(err?.message || err),
     });
   }
 }
