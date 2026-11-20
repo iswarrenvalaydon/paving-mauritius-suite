@@ -226,13 +226,13 @@ async function send(waId, body, draftId) {
   const ids = [];
   try {
     for (let i = 0; i < parts.length; i += 1) {
-      if (i > 0) await sleep(1500); // a natural gap between messages
+      if (i > 0) await sleep(6500); // WhatsApp allows about one message every 6 seconds to the same person
       const id = await sendText(waId, parts[i]);
       await storeOut(waId, id, "text", parts[i]);
       ids.push(id);
     }
     if (attach === "price_list") {
-      if (parts.length) await sleep(1000);
+      if (parts.length) await sleep(6500);
       const data = await d360("/messages", {
         method: "POST",
         body: { messaging_product: "whatsapp", recipient_type: "individual", to: waId, type: "document", document: { link: priceListUrl(), filename: "Paving Mauritius - Price list.pdf" } },
@@ -355,6 +355,14 @@ module.exports = async function handler(req, res) {
       }
       case "record_quote": await recordQuote(waId, req.body.ref, req.body.total); return res.json({ ok: true });
       case "confirm_payment": return res.json(await confirmPayment(waId, value, draftId));
+      case "resend": {
+        const { data: m } = await db().from("wa_messages").select("*").eq("id", String(req.body.message_id || "")).maybeSingle();
+        if (!m || m.direction !== "out" || m.type !== "text" || !m.body) throw new Error("Only a text message we sent can be resent");
+        const id = await sendText(m.wa_id, m.body);
+        await storeOut(m.wa_id, id, "text", m.body);
+        await db().from("wa_messages").update({ status: "resent" }).eq("id", m.id);
+        return res.json({ ok: true, id });
+      }
       case "discard":
         await db().from("wa_drafts").update({ status: "discarded", decided_at: new Date().toISOString() }).eq("id", draftId);
         return res.json({ ok: true });

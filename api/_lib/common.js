@@ -50,7 +50,24 @@ async function d360(path, { method = "GET", body } = {}) {
   return data;
 }
 
+// WhatsApp allows about 1 message every 6 seconds to the same person (error 131056 if faster),
+// so retry rate-limit errors with a growing wait before giving up.
 async function sendText(to, body) {
+  const waits = [0, 4000, 8000];
+  let lastErr;
+  for (const wait of waits) {
+    if (wait) await new Promise((r) => setTimeout(r, wait));
+    try { return await sendTextOnce(to, body); }
+    catch (err) {
+      lastErr = err;
+      const raw = JSON.stringify(err.data || "") + String(err.message || "");
+      if (!/131056|130429|rate limit/i.test(raw)) throw err;
+    }
+  }
+  throw lastErr;
+}
+
+async function sendTextOnce(to, body) {
   const data = await d360("/messages", {
     method: "POST",
     // Show the link preview (map picture, Facebook page) whenever the message contains a link.

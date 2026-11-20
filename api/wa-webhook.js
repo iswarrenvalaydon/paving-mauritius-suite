@@ -1,7 +1,7 @@
 // Receives every WhatsApp event for 5725 4201 from 360dialog:
 // client messages, replies typed on the business phone (echoes), history sync and contacts.
 // It stores them in Supabase and asks Claude for a suggested reply. It never sends anything.
-const { db, hookToken, safeEqual, getSetting, logEvent, insertDraft } = require("./_lib/common");
+const { db, hookToken, safeEqual, getSetting, logEvent, insertDraft, sendText } = require("./_lib/common");
 const { draftReply, draftRow, hasContent } = require("./_lib/drafter");
 
 let waitUntil = null;
@@ -108,11 +108,12 @@ async function draftFor(waId, triggerId) {
 
 async function handle(body) {
   const changes = collectChanges(body);
-  if (!changes.length) { await logEvent("unknown", body); return []; }
+  if (!changes.length) { await logEvent("unknown", body); return { toDraft: [], resendLater: [] }; }
 
   const [botEnabled, staffList] = await Promise.all([getSetting("bot_enabled", true), getSetting("staff_numbers", [])]);
   const staff = new Set((Array.isArray(staffList) ? staffList : []).map(digits));
   const toDraft = [];
+  const resendLater = [];
 
   for (const { field, value } of changes) {
     const business = digits(value?.metadata?.display_phone_number);
@@ -143,7 +144,11 @@ async function handle(body) {
       }
       for (const s of value.statuses || []) {
         await db().from("wa_messages").update({ status: s.status }).eq("id", s.id);
-        if (s.status === "failed") await logEvent("send_failed", s);
+        if (s.status === "failed") {
+          await logEvent("send_failed", s);
+          const rateLimited = (s.errors || []).some((e) => Number(e.code) === 131056 || Number(e.code) === 130429);
+          if (rateLimited) resendLater.push(s.id);
+        }
       }
     } else if (field === "smb_message_echoes") {
       // Replies typed on the business phone or JL's linked devices.
@@ -192,7 +197,21 @@ async function handle(body) {
       await logEvent(field || "other", value);
     }
   }
-  return toDraft;
+  return { toDraft, resendLater };
+}
+
+// A message from the Suite that WhatsApp dropped for sending too fast: send it again once, 8 s later.
+async function resendFailed(messageId) {
+  try {
+    await sleep(8000);
+    const { data: m } = await db().from("wa_messages").select("*").eq("id", messageId).maybeSingle();
+    if (!m || m.source !== "suite" || m.type !== "text" || !m.body || m.status === "resent") return;
+    const id = await sendText(m.wa_id, m.body);
+    await db().from("wa_messages").upsert({ id, wa_id: m.wa_id, direction: "out", source: "suite", type: "text", body: m.body, status: "sent", sent_at: new Date().toISOString() }, { onConflict: "id", ignoreDuplicates: true });
+    await db().from("wa_messages").update({ status: "resent" }).eq("id", m.id);
+  } catch (err) {
+    await logEvent("resend_failed", { message_id: messageId, message: String(err?.message || err) });
+  }
 }
 
 module.exports = async function handler(req, res) {
@@ -203,13 +222,17 @@ module.exports = async function handler(req, res) {
   if (!safeEqual(token, hookToken())) return res.status(401).json({ error: "bad token" });
 
   let toDraft = [];
+  let resendLater = [];
   try {
-    toDraft = await handle(req.body);
+    ({ toDraft, resendLater } = await handle(req.body));
   } catch (err) {
     await logEvent("webhook_error", { message: String(err?.message || err), body: req.body });
   }
 
-  const jobs = Promise.all(toDraft.map(([waId, msgId]) => draftFor(waId, msgId)));
+  const jobs = Promise.all([
+    ...toDraft.map(([waId, msgId]) => draftFor(waId, msgId)),
+    ...resendLater.map((id) => resendFailed(id)),
+  ]);
   if (waitUntil) {
     waitUntil(jobs);
     return res.status(200).json({ ok: true });
