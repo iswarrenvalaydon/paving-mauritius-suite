@@ -419,7 +419,7 @@ export default function WhatsAppInbox(){
             </div>
             {draft.team_note&&<div style={{fontSize:13,color:"#333",marginBottom:8}}><b>Note for the team:</b> {draft.team_note}</div>}
             {hasQuote(draft)?(
-              <QuoteEditor key={draft.id} quote={draft.quote} contact={chat.contact} caption={draft.quote.caption||""} draftId={draft.id}
+              <QuoteEditor key={draft.id} quote={draft.quote} contact={chat.contact} caption={draft.quote.caption||""} followup={draft.body||""} draftId={draft.id}
                 waId={selected} api={api} onSent={quoteSent}/>
             ):(
               <>

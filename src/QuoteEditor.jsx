@@ -23,7 +23,7 @@ function toBase64(buf){
   return window.btoa(s);
 }
 
-export default function QuoteEditor({quote,contact,caption,draftId,waId,api,onSent,onCancel}){
+export default function QuoteEditor({quote,contact,caption,followup,draftId,waId,api,onSent,onCancel}){
   const [name,setName]=useState((quote&&quote.client_name)||(contact&&(contact.name||contact.profile_name))||"");
   const [location,setLocation]=useState((quote&&quote.location)||"");
   const [lines,setLines]=useState(()=>(quote&&quote.items&&quote.items.length)
@@ -35,6 +35,7 @@ export default function QuoteEditor({quote,contact,caption,draftId,waId,api,onSe
   const [err,setErr]=useState("");
   const [previewUrl,setPreviewUrl]=useState("");
   const [savedRef,setSavedRef]=useState("");
+  const [after,setAfter]=useState(()=>String(followup||"").split(/\n---\n/).map(t=>t.trim()).filter(Boolean));
 
   const calc=lines.map(l=>{
     const qty=parseFloat(l.qty)||0;
@@ -95,7 +96,7 @@ export default function QuoteEditor({quote,contact,caption,draftId,waId,api,onSe
       const doc=await makePdf(ref);
       await api("send_pdf",{
         wa_id:waId,filename:`${ref.replace(/\//g,"_")}.pdf`,data:toBase64(doc.output("arraybuffer")),
-        body:message,draft_id:draftId||null,ref,total,
+        body:message,draft_id:draftId||null,ref,total,followup:after.map(t=>t.trim()).filter(Boolean).join("\n---\n"),
       });
       if(!savedRef) await record(ref);
       onSent(ref);
@@ -164,6 +165,15 @@ export default function QuoteEditor({quote,contact,caption,draftId,waId,api,onSe
 
       <div style={{marginTop:10,fontSize:13,fontWeight:600}}>Message sent with the PDF</div>
       <textarea value={message} onChange={e=>setMessage(e.target.value)} rows={3} style={{...field,marginTop:4}}/>
+
+      <div style={{marginTop:10,fontSize:13,fontWeight:600}}>Messages sent after the PDF{after.length?"":" (none)"}</div>
+      {after.map((t,i)=>(
+        <div key={i} style={{display:"flex",gap:6,alignItems:"flex-start",marginTop:4}}>
+          <textarea value={t} onChange={e=>setAfter(a=>a.map((x,j)=>j===i?e.target.value:x))} rows={Math.min(6,Math.max(2,Math.ceil(t.length/38)))} style={{...field,flex:1}}/>
+          <button onClick={()=>setAfter(a=>a.filter((_,j)=>j!==i))} style={btn("#fff","#B00020",{padding:"6px 9px",border:"1px solid #B00020"})}>✖</button>
+        </div>
+      ))}
+      <button onClick={()=>setAfter(a=>[...a,""])} style={btn(LIGHT_BLUE,BLUE,{padding:"6px 12px",fontSize:13,marginTop:6})}>+ Message after the PDF</button>
 
       {err&&<div style={{background:"#FFE8E8",color:"#B00020",padding:8,borderRadius:6,fontSize:13,marginTop:8}}>{err}</div>}
 

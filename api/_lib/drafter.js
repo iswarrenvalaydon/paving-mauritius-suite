@@ -69,7 +69,7 @@ Attachments from the client (photos and PDFs) come after the conversation, label
 - If an attachment could not be loaded, say so in team_note.
 
 Quotations ("quote"):
-- quote.caption is the ONE short line sent with the PDF, in the client's language, e.g. "Here is your quotation.", "Voici votre devis.", in Creole "Voilà ou quotation." (never "Ala"). Nothing more. When you include a quote, leave "messages" empty.
+- quote.caption is the ONE short line sent with the PDF, in the client's language, e.g. "Here is your quotation.", "Voici votre devis.", in Creole "Voilà ou quotation." (never "Ala"). Nothing more. If the client also asked something else (e.g. "do you also lay the slabs?"), answer it in "messages": those are sent as separate messages right after the PDF. Otherwise leave "messages" empty.
 - Quantity in pieces = area in m² × pieces per m², rounded up to a whole piece. For two-colour or framed designs, follow the rulebook.
 - unit_price_incl_vat is the list price per piece from the rulebook, VAT included. Never apply a discount.
 - client_name: the client's name if known, otherwise their WhatsApp name. location: town or site address if known.
@@ -173,7 +173,7 @@ async function draftReply(waId) {
     .filter(Boolean)
     .slice(0, 3);
   return {
-    reply: quote ? "" : parts.join(MESSAGE_BREAK),
+    reply: parts.join(MESSAGE_BREAK), // with a quote, these go out after the PDF
     needs_team: Boolean(parsed.needs_team),
     team_note: String(parsed.team_note || "").trim(),
     quote,

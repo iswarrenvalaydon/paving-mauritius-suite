@@ -274,28 +274,46 @@ async function redraft(waId) {
 }
 
 // Sends a PDF made in the Suite (an approved quotation) to the client.
-async function sendPdf(waId, { filename, data, caption, draftId, ref, total }) {
+async function sendPdf(waId, { filename, data, caption, draftId, followup }) {
   const name = String(filename || "Quotation.pdf").replace(/[^\w.\-]/g, "_");
   const buf = Buffer.from(String(data || ""), "base64");
   if (buf.length < 100 || buf.slice(0, 4).toString() !== "%PDF") throw new Error("The PDF could not be created");
   const text = String(caption || "").trim();
+  const after = String(followup || "").split(/\n---\n/).map((t) => t.trim()).filter(Boolean);
+  let draft = null;
+  if (draftId) ({ data: draft } = await db().from("wa_drafts").select("*").eq("id", draftId).maybeSingle());
+  let pdfSent = false;
   try {
     const mediaId = await uploadMedia(buf, "application/pdf", name);
     const id = await sendDocument(waId, mediaId, name, text);
-    const now = new Date().toISOString();
+    pdfSent = true;
     await db().from("wa_messages").upsert({
       id, wa_id: waId, direction: "out", source: "suite", type: "document", media_id: mediaId,
-      body: `[Document ${name}]${text ? ` ${text}` : ""}`, status: "sent", sent_at: now,
+      body: `[Document ${name}]${text ? ` ${text}` : ""}`, status: "sent", sent_at: new Date().toISOString(),
     }, { onConflict: "id", ignoreDuplicates: true });
+    // Answers to the client's other questions go out after the PDF, as separate messages.
+    for (const part of after) {
+      await sleep(6500);
+      const mid = await sendText(waId, part);
+      await storeOut(waId, mid, "text", part);
+    }
+    let warning = null;
+    let referralSent = false;
+    if (draft?.quote?.referral) {
+      try { await notifyRavin(waId, draft.quote.referral); referralSent = true; }
+      catch (e) { warning = `Ravin couldn't be told: ${String(e.message || e)}`; }
+    }
+    const now = new Date().toISOString();
     await db().from("wa_contacts").update({ last_message_at: now, unread: 0 }).eq("wa_id", waId);
     await db().from("wa_drafts").update({ status: "superseded", decided_at: now }).eq("wa_id", waId).eq("status", "pending").neq("id", draftId || 0);
-    if (draftId) await db().from("wa_drafts").update({ status: "sent", body: text, decided_at: now }).eq("id", draftId);
-    return { ok: true, id };
+    if (draftId) await db().from("wa_drafts").update({ status: "sent", body: [text, ...after].join("\n---\n"), decided_at: now }).eq("id", draftId);
+    return { ok: true, id, warning, referral_sent: referralSent };
   } catch (err) {
     const late = JSON.stringify(err.data || "").includes("131047");
-    throw new Error(late
+    const msg = late
       ? "This client last wrote more than 24 hours ago, so WhatsApp won't let us send the quotation now. Send it from the phone, or wait for the client to write again."
-      : String(err.message || err));
+      : String(err.message || err);
+    throw new Error(pdfSent ? `The quotation was sent, but a message after it failed: ${msg}` : msg);
   }
 }
 
@@ -349,7 +367,7 @@ module.exports = async function handler(req, res) {
       case "send": return res.json(await send(waId, body, draftId));
       case "referral_payment": return res.json({ ok: true, referral: await sendPaymentUpdate(waId, value) });
       case "send_pdf": {
-        const r = await sendPdf(waId, { filename: req.body.filename, data: req.body.data, caption: body, draftId });
+        const r = await sendPdf(waId, { filename: req.body.filename, data: req.body.data, caption: body, draftId, followup: req.body.followup });
         try { await recordQuote(waId, req.body.ref, req.body.total); } catch { /* the quotation went out; the total is only for payment tracking */ }
         return res.json(r);
       }
