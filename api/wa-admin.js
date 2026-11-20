@@ -274,7 +274,13 @@ async function redraft(waId) {
 }
 
 // Sends a PDF made in the Suite (an approved quotation) to the client.
-async function sendPdf(waId, { filename, data, caption, draftId, followup }) {
+function quotesOf(extras) {
+  if (!extras) return [];
+  if (Array.isArray(extras.quotes)) return extras.quotes;
+  return Array.isArray(extras.items) ? [extras] : [];
+}
+
+async function sendPdf(waId, { filename, data, caption, draftId, followup, quoteIndex, ref }) {
   const name = String(filename || "Quotation.pdf").replace(/[^\w.\-]/g, "_");
   const buf = Buffer.from(String(data || ""), "base64");
   if (buf.length < 100 || buf.slice(0, 4).toString() !== "%PDF") throw new Error("The PDF could not be created");
@@ -283,6 +289,11 @@ async function sendPdf(waId, { filename, data, caption, draftId, followup }) {
   let draft = null;
   if (draftId) ({ data: draft } = await db().from("wa_drafts").select("*").eq("id", draftId).maybeSingle());
   let pdfSent = false;
+  // With several quotations in one suggestion, each is sent on its own; the follow-up messages,
+  // referral and closing go out with the last one.
+  const quotes = quotesOf(draft?.quote);
+  const idx = Number(quoteIndex) || 0;
+  const sentMap = { ...(draft?.quote?.sent || {}) };
   try {
     const mediaId = await uploadMedia(buf, "application/pdf", name);
     const id = await sendDocument(waId, mediaId, name, text);
@@ -291,6 +302,15 @@ async function sendPdf(waId, { filename, data, caption, draftId, followup }) {
       id, wa_id: waId, direction: "out", source: "suite", type: "document", media_id: mediaId,
       body: `[Document ${name}]${text ? ` ${text}` : ""}`, status: "sent", sent_at: new Date().toISOString(),
     }, { onConflict: "id", ignoreDuplicates: true });
+    if (draft && quotes.length > 1) {
+      sentMap[idx] = String(ref || name);
+      const done = quotes.every((_, i) => sentMap[i]);
+      if (!done) {
+        await db().from("wa_drafts").update({ quote: { ...draft.quote, sent: sentMap } }).eq("id", draftId);
+        await db().from("wa_contacts").update({ last_message_at: new Date().toISOString(), unread: 0 }).eq("wa_id", waId);
+        return { ok: true, id, remaining: quotes.length - Object.keys(sentMap).length };
+      }
+    }
     // Answers to the client's other questions go out after the PDF, as separate messages.
     for (const part of after) {
       await sleep(6500);
@@ -367,7 +387,7 @@ module.exports = async function handler(req, res) {
       case "send": return res.json(await send(waId, body, draftId));
       case "referral_payment": return res.json({ ok: true, referral: await sendPaymentUpdate(waId, value) });
       case "send_pdf": {
-        const r = await sendPdf(waId, { filename: req.body.filename, data: req.body.data, caption: body, draftId, followup: req.body.followup });
+        const r = await sendPdf(waId, { filename: req.body.filename, data: req.body.data, caption: body, draftId, followup: req.body.followup, quoteIndex: req.body.quote_index, ref: req.body.ref });
         try { await recordQuote(waId, req.body.ref, req.body.total); } catch { /* the quotation went out; the total is only for payment tracking */ }
         return res.json(r);
       }

@@ -28,7 +28,13 @@ function when(iso){
 }
 const BREAK="\n---\n"; // the short messages of one suggestion are joined with this
 function splitParts(t){ const p=String(t||"").split(/\n---\n/); return p.length?p:[""]; }
-function hasQuote(d){ return Boolean(d&&d.quote&&Array.isArray(d.quote.items)&&d.quote.items.length); }
+function quotesOf(d){
+  const x=d&&d.quote;
+  if(!x) return [];
+  if(Array.isArray(x.quotes)) return x.quotes.filter(q=>q&&Array.isArray(q.items)&&q.items.length);
+  return Array.isArray(x.items)&&x.items.length?[x]:[];
+}
+function hasQuote(d){ return quotesOf(d).length>0; }
 
 function displayName(c){
   if(!c) return "";
@@ -176,7 +182,12 @@ export default function WhatsAppInbox(){
     finally{ setBusy(false); }
   }
 
-  async function quoteSent(ref){
+  async function quoteSent(ref,r){
+    if(r&&r.remaining>0){
+      setInfo(`✅ Quotation ${ref} sent. ${r.remaining} more to send.`);
+      await loadChat(selected); return;
+    }
+    if(r&&r.warning) setError(r.warning);
     setInfo(`✅ Quotation ${ref} sent and saved`);
     setQuoteOpen(false); draftIdRef.current=null; setDraftText("");
     await loadChat(selected); loadChats();
@@ -419,8 +430,24 @@ export default function WhatsAppInbox(){
             </div>
             {draft.team_note&&<div style={{fontSize:13,color:"#333",marginBottom:8}}><b>Note for the team:</b> {draft.team_note}</div>}
             {hasQuote(draft)?(
-              <QuoteEditor key={draft.id} quote={draft.quote} contact={chat.contact} caption={draft.quote.caption||""} followup={draft.body||""} draftId={draft.id}
-                waId={selected} api={api} onSent={quoteSent}/>
+              <>
+                {(()=>{
+                  const qs=quotesOf(draft);
+                  const sent=(draft.quote&&draft.quote.sent)||{};
+                  const unsent=qs.map((_,i)=>i).filter(i=>!sent[i]);
+                  return(
+                    <>
+                      {qs.length>1&&<div style={{fontSize:13,color:BLUE,marginBottom:4}}>{qs.length} quotations, one per option. Send each one; the extra messages go after the last.</div>}
+                      {qs.map((q,i)=>(
+                        <QuoteEditor key={`${draft.id}-${i}`} quote={q} contact={chat.contact} caption={q.caption||""}
+                          followup={draft.body||""} showFollowup={unsent.length===1&&unsent[0]===i}
+                          label={qs.length>1?`Quotation ${i+1} of ${qs.length}`:"Quotation"} quoteIndex={i} sentRef={sent[i]||""}
+                          draftId={draft.id} waId={selected} api={api} onSent={quoteSent}/>
+                      ))}
+                    </>
+                  );
+                })()}
+              </>
             ):(
               <>
                 {splitParts(draftText).map((part,i,all)=>(

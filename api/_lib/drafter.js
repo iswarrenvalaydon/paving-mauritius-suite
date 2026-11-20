@@ -2,6 +2,7 @@
 // the draft waits in the Suite until Iswarren or JL approves it.
 const { db, getSetting, fmtTime, downloadMedia } = require("./common");
 const { RULEBOOK } = require("./rulebook");
+const { checkLine } = require("./products");
 
 const MODEL = process.env.BOT_MODEL || "claude-sonnet-5-5";
 const HISTORY_LIMIT = 40;
@@ -60,7 +61,7 @@ The usual conversation:
 1. Facebook ad: a message starting with [From Facebook ad: ...] or [From Facebook post: ...] means the client tapped our ad (the text in quotes is the ad; "Hello! Can I get more info on this?" is Facebook's automatic text). First reply, as two short messages: thank them for their interest in the advertised product (name only that product), then "Do you know your measurements? I can give you a quotation." No price list, no colour list, no other sizes. If the ad text is missing, ask briefly whether they want pavers or slabs, then the measurements question.
 2. Measurements or a sketch: first message = the area you read (ask them to confirm if it came from a sketch) and the number of pieces. If the colour isn't known yet, the second message is just "Which colour would you like?" (don't list colours or prices; let them ask).
 3. Once product, size, colour and area are known: first message = number of pieces and the estimated total, VAT included. Second message = "Would you like a formal quotation?"
-4. Only when the client says yes, or asks for a quotation themselves, prepare "quote" (see below). If they ask for a quotation directly, don't ask "would you like a quotation?" again: prepare it straight away if you have product, size, colour and area, otherwise ask only for what's missing.
+4. Only when the client says yes, or asks for a quotation themselves, prepare "quotes" (see below). If they ask for a quotation directly, don't ask "would you like a quotation?" again: prepare it straight away if you have product, size, colour and area, otherwise ask only for what's missing.
 
 Attachments from the client (photos and PDFs) come after the conversation, labelled to match it (for example [Photo 1]):
 - Sketches and plans: read every measurement and calculate the area, including uneven sides and slopes (trapezoids, triangles), following the rulebook. Tell the client the area you found; don't ask them to confirm it. Ask only for a measurement that is missing or unreadable when the area can't be calculated without it. Put your working in team_note (e.g. "400×200 − 100×(120+100)/2 = 69,000 sq ft = 6,410 m²") so the team can check it.
@@ -68,12 +69,15 @@ Attachments from the client (photos and PDFs) come after the conversation, label
 - Payment proofs: fill "payment" with the amount in rupees (a number), date, bank and reference, mention them in team_note, and set needs_team. Never tell the client the payment is confirmed; just thank them and say the team will check it.
 - If an attachment could not be loaded, say so in team_note.
 
-Quotations ("quote"):
-- quote.caption is the ONE short line sent with the PDF, in the client's language, e.g. "Here is your quotation.", "Voici votre devis.", in Creole "Voilà ou quotation." (never "Ala"). Nothing more. If the client also asked something else (e.g. "do you also lay the slabs?"), answer it in "messages": those are sent as separate messages right after the PDF. Otherwise leave "messages" empty.
-- Quantity in pieces = area in m² × pieces per m², rounded up to a whole piece. For two-colour or framed designs, follow the rulebook.
+Quotations ("quotes", a list):
+- One quotation per option. If the client wants prices for several products, sizes, colours or laying patterns (e.g. "one quotation for each slab"), make a separate quotation for each one in "quotes"; never put alternatives together in one quotation (their totals would add up). Only lines that go together on the same job (e.g. slabs plus the pavers framing them) share one quotation.
+- Each quotation's caption is the ONE short line sent with its PDF; with several, name the option, e.g. "Voilà ou quotation pou slab 300x300.", in the client's language, e.g. "Here is your quotation.", "Voici votre devis.", in Creole "Voilà ou quotation." (never "Ala"). Nothing more. If the client also asked something else (e.g. "do you also lay the slabs?"), answer it in "messages": those are sent as separate messages right after the PDF. Otherwise leave "messages" empty.
+- For a simple line covering an area, give "area_m2" (or "area_sqft" if the client used feet) and, for slabs laid with a space between them, "gap_cm" (the gap in cm). The Suite works out the pieces from the price list; you may leave qty at 0. If the client wants a gap but hasn't said how wide, ask (suggest the usual 2.5 to 5 cm) before quoting. For two-colour or framed designs, work out qty yourself following the rulebook.
 - unit_price_incl_vat is the list price per piece from the rulebook, VAT included. Never apply a discount.
 - client_name: the client's name if known, otherwise their WhatsApp name. location: town or site address if known.
 - summary: one line for the team, e.g. "20 m² driveway, pavers 60 mm, Light Grey".
+
+First contact: the very first time a client talks to us, end that first conversation with "Thank you for contacting us." in their language (French "Merci de nous avoir contactés.", Creole "Mersi pou ou finn contacte nou."), as the last message once their questions are answered or the quotation is sent (also when they reply "ok merci"). Say it only once per client: if it was already said earlier in the chat, don't repeat it.
 
 Price list: when the client asks for the price list, set "attach" to "price_list" and send one short line such as "Here is our price list." The PDF goes with it.
 ${referralText(ravin)}${examplesText(examples)}
@@ -84,7 +88,7 @@ Reply with ONLY a JSON object, no other text:
 {"messages": ["<short message>", "<short message>"], "needs_team": true|false, "team_note": "<short note or empty>", "attach": null | "price_list",
  "referral": null | {"client_name": "", "location": "", "product": "", "area": ""},
  "payment": null | {"amount": 25000, "date": "", "bank": "", "reference": ""},
- "quote": null | {"client_name": "", "location": "", "summary": "", "caption": "Here is your quotation.", "items": [{"desc": "Pavers 200x100x60mm – Light Grey", "qty": 1000, "unit_price_incl_vat": 13.5}]}}`;
+ "quotes": [] | [{"client_name": "", "location": "", "summary": "", "caption": "Here is your quotation.", "items": [{"desc": "Slabs 600x300x60mm – Light Grey", "qty": 0, "area_m2": 20, "gap_cm": 5, "unit_price_incl_vat": 145}]}]}`;
 }
 
 function transcript(messages, labels) {
@@ -207,7 +211,9 @@ async function draftReply(waId) {
     parsed = { ...saved, needs_team: true, team_note: "The bot's answer was cut short; check it before sending." };
   }
   if (data.stop_reason === "max_tokens" && toolUse) parsed = { ...parsed, needs_team: true, team_note: [parsed.team_note, "(The bot's answer was cut short; check it.)"].filter(Boolean).join(" ") };
-  const quote = cleanQuote(parsed.quote);
+  const rawQuotes = Array.isArray(parsed.quotes) ? parsed.quotes : parsed.quote ? [parsed.quote] : [];
+  const quotes = rawQuotes.map(cleanQuote).filter(Boolean).slice(0, 4);
+  const quote = quotes.length ? quotes[0] : null;
   const parts = (Array.isArray(parsed.messages) ? parsed.messages : [parsed.reply])
     .map((m) => String(m || "").replace(/\n-{3,}\n/g, "\n").trim())
     .filter(Boolean)
@@ -217,6 +223,7 @@ async function draftReply(waId) {
     needs_team: Boolean(parsed.needs_team),
     team_note: String(parsed.team_note || "").trim(),
     quote,
+    quotes,
     attach: parsed.attach === "price_list" ? "price_list" : null,
     referral: cleanReferral(parsed.referral),
     payment: cleanPayment(parsed.payment),
@@ -240,7 +247,7 @@ function cleanReferral(r) {
 
 // Builds the row saved in wa_drafts. Extras (quotation, attachment) live in the "quote" column.
 function draftRow(waId, replyTo, draft) {
-  const extras = draft.quote ? { ...draft.quote } : {};
+  const extras = draft.quotes && draft.quotes.length ? { quotes: draft.quotes } : {};
   if (draft.attach) extras.attach = draft.attach;
   if (draft.referral) extras.referral = draft.referral;
   if (draft.payment) extras.payment = draft.payment;
@@ -258,11 +265,15 @@ function hasContent(draft) {
 function cleanQuote(q) {
   if (!q || typeof q !== "object" || !Array.isArray(q.items)) return null;
   const items = q.items
-    .map((i) => ({
+    .map((i) => checkLine({
       desc: String(i?.desc || "").slice(0, 120).trim(),
       qty: Math.max(0, Math.ceil(Number(i?.qty) || 0)),
       unit_price_incl_vat: Math.max(0, Number(i?.unit_price_incl_vat) || 0),
+      area_m2: Number(i?.area_m2) || 0,
+      area_sqft: Number(i?.area_sqft) || 0,
+      gap_cm: Number(i?.gap_cm) || 0,
     }))
+    .map(({ desc, qty, unit_price_incl_vat }) => ({ desc, qty, unit_price_incl_vat }))
     .filter((i) => i.desc && i.qty > 0)
     .slice(0, 12);
   if (!items.length) return null;
