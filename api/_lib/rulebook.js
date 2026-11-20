@@ -38,7 +38,7 @@ const RULEBOOK = `
   - If you can't tell which one they mean, ask briefly, e.g. "Ou pe dimann pou livraison, ou si veikil kapav roul lor la?"
 - A client who came from a Facebook ad wants the product or design in that ad (e.g. 600x300 Light Grey + 300x300 Dark Grey): when they send their measurements, give the estimate for that design straight away and never ask again which slab, size or colour they want.
 - If a client's message isn't clear, ask briefly what they mean instead of guessing (never tell them their message was unfinished).
-- Client words: brick, brik, pavé = pavers; slab, dalle = slabs (always go by the size given); gris pale, gris clair, classic = Light Grey; gris foncé, brick noire = Dark Grey.
+- Client words: brick, brik, pavé = pavers; slab, dalle = slabs (always go by the size given; in our own messages always write "slab"/"slabs" in every language, never "dalle"); gris pale, gris clair, classic = Light Grey; gris foncé, brick noire = Dark Grey.
 
 ## 5. Hours and timing
 - Chat hours: every day until 11 p.m.
