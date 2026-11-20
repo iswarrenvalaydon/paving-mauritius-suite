@@ -2,6 +2,7 @@
 // set in Vercel. The browser never sees the WhatsApp, Claude or Supabase secret keys.
 const { db, hookToken, safeEqual, d360, sendText, downloadMedia, uploadMedia, sendDocument, insertDraft, getSetting, setSetting, logEvent } = require("./_lib/common");
 const { draftReply, draftRow } = require("./_lib/drafter");
+const { latestAd, getAds, describeAd, deleteAd } = require("./_lib/ads");
 
 const digits = (s) => String(s || "").replace(/\D/g, "");
 const sleep = (ms) => new Promise((r) => setTimeout(r, ms));
@@ -42,7 +43,10 @@ async function getChat(waId) {
     db().from("wa_drafts").select("*").eq("wa_id", waId).eq("status", "pending").order("created_at", { ascending: false }).limit(1),
   ]);
   await db().from("wa_contacts").update({ unread: 0 }).eq("wa_id", waId);
-  return { contact, messages: (messages || []).reverse(), draft: drafts?.[0] || null, referral: await getReferral(waId), money: await paymentSummary(waId) };
+  const list = (messages || []).reverse();
+  const ad = latestAd(list);
+  const ads = ad ? await getAds() : {};
+  return { contact, messages: list, draft: drafts?.[0] || null, referral: await getReferral(waId), money: await paymentSummary(waId), ad: ad ? { ...ad, design: ads[ad.key]?.design || "" } : null };
 }
 
 const LATE = "This client last wrote more than 24 hours ago, so WhatsApp won't let us send a normal message. Reply from the phone instead, or wait for the client to write again.";
@@ -355,6 +359,7 @@ async function status(req) {
     out.bot_enabled = await getSetting("bot_enabled", true);
     out.staff_numbers = await getSetting("staff_numbers", []);
     out.examples = await getSetting("examples", []);
+    out.ads = Object.entries(await getAds()).map(([key, a]) => ({ key, ...a })).sort((a, b) => String(b.first_seen || "").localeCompare(String(a.first_seen || "")));
     out.ravin_number = await getSetting("ravin_number", "");
     out.tables = true;
   } catch (err) { out.tables = false; out.table_error = String(err.message || err); }
@@ -405,6 +410,13 @@ module.exports = async function handler(req, res) {
         await db().from("wa_drafts").update({ status: "discarded", decided_at: new Date().toISOString() }).eq("id", draftId);
         return res.json({ ok: true });
       case "redraft": return res.json({ draft: await redraft(waId) });
+      case "describe_ad": {
+        const ad = await describeAd(String(req.body.key || ""), value, { label: req.body.label, url: req.body.url });
+        let draft = null;
+        if (waId) { try { draft = await redraft(waId); } catch { /* the ad is saved; the team can tap New suggestion */ } }
+        return res.json({ ok: true, ad, draft });
+      }
+      case "delete_ad": await deleteAd(String(value || "")); return res.json({ ok: true });
       case "pause_contact":
         await db().from("wa_contacts").update({ bot_paused: Boolean(value) }).eq("wa_id", waId);
         return res.json({ ok: true });

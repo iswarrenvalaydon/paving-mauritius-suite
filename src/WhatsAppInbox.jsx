@@ -69,6 +69,9 @@ export default function WhatsAppInbox(){
   const [quoteOpen,setQuoteOpen]=useState(false);
   const [ravinInput,setRavinInput]=useState("");
   const [payAmount,setPayAmount]=useState("");
+  const [adInput,setAdInput]=useState("");
+  const [adEdit,setAdEdit]=useState(false);
+  const [adEdits,setAdEdits]=useState({});
   const draftIdRef=useRef(null);
   const bottomRef=useRef(null);
 
@@ -153,7 +156,7 @@ export default function WhatsAppInbox(){
   }
 
   function openChat(waId){
-    setSelected(waId); setChat(null); setView("chat"); setMedia({}); setQuoteOpen(false); setPayAmount("");
+    setSelected(waId); setChat(null); setView("chat"); setMedia({}); setQuoteOpen(false); setPayAmount(""); setAdInput(""); setAdEdit(false);
     draftIdRef.current=null; setDraftText(""); setManualText(""); setInfo("");
     loadChat(waId);
   }
@@ -197,6 +200,12 @@ export default function WhatsAppInbox(){
     if(!chat||!chat.draft) return;
     const r=await act("discard",{draft_id:chat.draft.id},"Suggestion discarded");
     if(r){ draftIdRef.current=null; setDraftText(""); await loadChat(selected); loadChats(); }
+  }
+
+  async function saveAd(){
+    if(!chat||!chat.ad||!adInput.trim()) return;
+    const r=await act("describe_ad",{wa_id:selected,key:chat.ad.key,label:chat.ad.label,url:chat.ad.url,value:adInput},"Ad saved, new suggestion written");
+    if(r){ setAdInput(""); setAdEdit(false); draftIdRef.current=null; await loadChat(selected); loadChats(); }
   }
 
   async function redraft(){
@@ -314,6 +323,27 @@ export default function WhatsAppInbox(){
               );
             })()}
 
+            <div style={{marginTop:18,fontWeight:700,color:BLUE,fontSize:14}}>Facebook ads</div>
+            <div style={{fontSize:12,color:MID_GREY,marginBottom:6}}>Ads clients have come from. Tell the bot what each one shows, and it quotes that for every client from the ad.</div>
+            {(!setup.ads||!setup.ads.length)&&<div style={{fontSize:13,color:MID_GREY}}>No clients from ads yet.</div>}
+            {(setup.ads||[]).map(a=>{
+              const v=adEdits[a.key]!==undefined?adEdits[a.key]:(a.design||"");
+              return(
+                <div key={a.key} style={{border:`1px solid ${a.design?"#eee":ORANGE}`,borderRadius:8,padding:8,marginBottom:6,fontSize:12}}>
+                  <div><b>{a.label}</b>{a.url&&<> · <a href={a.url} target="_blank" rel="noreferrer">open</a></>}</div>
+                  {!a.design&&<div style={{color:ORANGE}}>The bot doesn't know what this ad shows yet.</div>}
+                  <textarea value={v} onChange={e=>setAdEdits({...adEdits,[a.key]:e.target.value})} rows={2} placeholder="e.g. 600x300 Light Grey + 300x300 Dark Grey design"
+                    style={{width:"100%",boxSizing:"border-box",padding:6,fontSize:13,borderRadius:6,border:"1px solid #ccc",marginTop:4}}/>
+                  <div style={{display:"flex",gap:6,marginTop:4}}>
+                    <button onClick={async()=>{ const r=await act("describe_ad",{key:a.key,label:a.label,url:a.url,value:v},"Ad saved"); if(r){ setAdEdits({...adEdits,[a.key]:undefined}); openSetup(); } }} disabled={busy||!v.trim()||v===a.design}
+                      style={btn(GREEN,"#fff",{padding:"4px 10px",fontSize:12})}>Save</button>
+                    <button onClick={async()=>{ const r=await act("delete_ad",{value:a.key},"Ad removed"); if(r) openSetup(); }} disabled={busy}
+                      style={btn("#fff","#B00020",{border:"1px solid #B00020",padding:"4px 10px",fontSize:12})}>Remove</button>
+                  </div>
+                </div>
+              );
+            })}
+
             <div style={{marginTop:18,fontWeight:700,color:BLUE,fontSize:14}}>What the bot learned from your corrections</div>
             <div style={{fontSize:12,color:MID_GREY,marginBottom:6}}>When you change a suggestion before sending, the bot keeps the example and follows it for all clients. Delete any that shouldn't become a habit.</div>
             {(!setup.examples||!setup.examples.length)&&<div style={{fontSize:13,color:MID_GREY}}>None yet.</div>}
@@ -385,6 +415,25 @@ export default function WhatsAppInbox(){
         </div>
 
         <div style={{marginTop:12}}>{banner}</div>
+
+        {chat&&chat.ad&&((!chat.ad.design||adEdit)?(
+          <div style={{border:`2px solid ${ORANGE}`,background:LIGHT_ORANGE,borderRadius:10,padding:12,marginBottom:10}}>
+            <div style={{fontWeight:700,color:ORANGE,fontSize:14}}>📢 {chat.ad.design?"Change what this ad shows":"New ad: what's in it?"}</div>
+            <div style={{fontSize:13,color:"#333",margin:"4px 0 8px"}}>
+              This client came from the ad "{chat.ad.label}".{chat.ad.url&&<> <a href={chat.ad.url} target="_blank" rel="noreferrer">Open the ad</a></>} Tell the bot once what the ad shows; it will use it for every client from this ad.
+            </div>
+            <textarea value={adInput} onChange={e=>setAdInput(e.target.value)} rows={2} placeholder="e.g. 600x300 Light Grey + 300x300 Dark Grey design"
+              style={{width:"100%",boxSizing:"border-box",padding:8,fontSize:14,borderRadius:6,border:"1px solid #ccc"}}/>
+            <div style={{display:"flex",gap:8,marginTop:6}}>
+              <button onClick={saveAd} disabled={busy||!adInput.trim()} style={btn(GREEN,"#fff",{padding:"8px 12px",fontSize:13})}>Save & new suggestion</button>
+              {chat.ad.design&&<button onClick={()=>{ setAdEdit(false); setAdInput(""); }} disabled={busy} style={btn("#fff",MID_GREY,{border:"1px solid #ccc",padding:"8px 12px",fontSize:13})}>Cancel</button>}
+            </div>
+          </div>
+        ):(
+          <div style={{fontSize:12,color:MID_GREY,marginBottom:8}}>
+            📢 From the ad "{chat.ad.label}": {chat.ad.design} · <button onClick={()=>{ setAdInput(chat.ad.design); setAdEdit(true); }} style={{background:"none",border:"none",color:BLUE,padding:0,fontSize:12,textDecoration:"underline",cursor:"pointer"}}>change</button>
+          </div>
+        ))}
 
         {chat&&(()=>{
           const money=chat.money||{};

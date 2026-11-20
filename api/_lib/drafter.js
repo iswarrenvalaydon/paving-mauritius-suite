@@ -3,6 +3,7 @@
 const { db, getSetting, fmtTime, downloadMedia } = require("./common");
 const { RULEBOOK } = require("./rulebook");
 const { checkLine } = require("./products");
+const { getAds, latestAd, adPrompt } = require("./ads");
 
 const MODEL = process.env.BOT_MODEL || "claude-sonnet-5-5";
 const HISTORY_LIMIT = 40;
@@ -184,10 +185,14 @@ async function draftReply(waId) {
   const messages = (recent || []).reverse();
   if (!messages.length) return null;
 
-  const [rulebook, examples, ravin] = await Promise.all([getSetting("rulebook", RULEBOOK), getSetting("examples", []), getSetting("ravin_number", "")]);
+  const [rulebook, examples, ravin, ads] = await Promise.all([getSetting("rulebook", RULEBOOK), getSetting("examples", []), getSetting("ravin_number", ""), getAds()]);
+  const ad = latestAd(messages);
+  const adInfo = ad ? ads[ad.key] : null;
+  const adUnknown = Boolean(ad && !(adInfo && adInfo.design));
   const { labels, blocks } = await mediaBlocks(messages);
   const content = [
     { type: "text", text: `Conversation so far (oldest first):\n${transcript(messages, labels)}` },
+    ...(ad ? [{ type: "text", text: adPrompt(ad, adInfo) }] : []),
     ...(blocks.length ? [{ type: "text", text: "Attachments from the client:" }, ...blocks] : []),
     { type: "text", text: "Write the JSON for our next message." },
   ];
@@ -221,8 +226,8 @@ async function draftReply(waId) {
     .slice(0, 3);
   return {
     reply: parts.join(MESSAGE_BREAK), // with a quote, these go out after the PDF
-    needs_team: Boolean(parsed.needs_team),
-    team_note: String(parsed.team_note || "").trim(),
+    needs_team: Boolean(parsed.needs_team) || adUnknown,
+    team_note: [adUnknown ? "📢 New ad: tell the bot what's in it (box above), then it can quote." : "", String(parsed.team_note || "").trim()].filter(Boolean).join(" "),
     quote,
     quotes,
     attach: parsed.attach === "price_list" ? "price_list" : null,

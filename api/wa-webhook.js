@@ -3,6 +3,7 @@
 // It stores them in Supabase and asks Claude for a suggested reply. It never sends anything.
 const { db, hookToken, safeEqual, getSetting, logEvent, insertDraft, sendText } = require("./_lib/common");
 const { draftReply, draftRow, hasContent } = require("./_lib/drafter");
+const { adText, noteAd } = require("./_lib/ads");
 
 let waitUntil = null;
 try { ({ waitUntil } = require("@vercel/functions")); } catch { waitUntil = null; }
@@ -37,9 +38,11 @@ function bodyOf(m) {
 function adOf(m) {
   const r = m?.referral;
   if (!r) return "";
-  const what = [r.headline, r.body].filter(Boolean).map((t) => String(t).replace(/\s+/g, " ").trim()).join(" – ").slice(0, 300);
+  const what = adText(r);
   const src = r.source_type === "post" ? "Facebook post" : "Facebook ad";
-  return `[From ${src}${what ? `: "${what}"` : ""}${r.source_url ? ` ${r.source_url}` : ""}] `;
+  const url = String(r.source_url || "").trim();
+  const id = String(r.source_id || "").replace(/[()\]\s]/g, "");
+  return `[From ${src}${what ? `: "${what}"` : ""}${/^https?:\/\//.test(url) ? ` ${url.replace(/\s/g, "")}` : ""}${id ? ` (ad ${id})` : ""}] `;
 }
 function mediaIdOf(m) {
   return m?.[m?.type]?.id || null;
@@ -132,7 +135,10 @@ async function handle(body) {
           id: m.id, wa_id: digits(m.from), direction: "in", source: "client", type: m.type,
           body: adOf(m) + bodyOf(m), media_id: mediaIdOf(m), sent_at: isoFromTs(m.timestamp),
         })));
-        for (const m of msgs) if (m.referral) await logEvent("ad_referral", { wa_id: digits(m.from), message_id: m.id, referral: m.referral });
+        for (const m of msgs) if (m.referral) {
+          await logEvent("ad_referral", { wa_id: digits(m.from), message_id: m.id, referral: m.referral });
+          try { await noteAd(m.referral); } catch { /* only for the Setup list */ }
+        }
         await refreshLastMessage(msgs.map((m) => digits(m.from)));
         for (const m of msgs) {
           if (!newIds.includes(m.id)) continue; // retry of something we already have
