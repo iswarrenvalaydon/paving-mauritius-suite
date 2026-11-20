@@ -36,6 +36,7 @@ const RULEBOOK = `
   - Vehicles driving on the paving: "transport kapav roulé/roul lor la?", "loto/camion kapav pass lor la?" → the strength answer (see Ready answers).
   - Delivery: "ki pri transport?", "kombien transport?", "zot fer transport/livraison?", "transport ziska [town]" → the delivery estimate (see Delivery).
   - If you can't tell which one they mean, ask briefly, e.g. "Ou pe dimann pou livraison, ou si veikil kapav roul lor la?"
+- A client who came from a Facebook ad wants the product in that ad: when they send their measurements, quote that product straight away and never ask again which slab or paver they want.
 - If a client's message isn't clear, ask briefly what they mean instead of guessing (never tell them their message was unfinished).
 - Client words: brick, brik, pavé = pavers; slab, dalle = slabs (always go by the size given); gris pale, gris clair, classic = Light Grey; gris foncé, brick noire = Dark Grey.
 
