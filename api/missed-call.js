@@ -8,6 +8,8 @@ const digits = (s) => String(s || "").replace(/\D/g, "");
 // Mauritian numbers come as 8 digits (5xxx xxxx) or with 230 / +230 in front.
 function waIdOf(raw) {
   let d = digits(raw);
+  // The number put in twice by mistake (e.g. "[call_number][call_number]"): keep one.
+  if (d.length % 2 === 0 && d.length >= 16 && d.slice(0, d.length / 2) === d.slice(d.length / 2)) d = d.slice(0, d.length / 2);
   if (d.startsWith("00")) d = d.slice(2);
   if (d.length === 8) d = `230${d}`;
   return d.length >= 10 && d.length <= 15 ? d : "";
