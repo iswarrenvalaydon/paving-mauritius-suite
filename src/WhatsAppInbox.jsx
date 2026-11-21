@@ -314,14 +314,30 @@ export default function WhatsAppInbox(){
                 <>
                   {row(t.referral==="approved","Template: referral message to Ravin",t.error||label(t.referral))}
                   {row(t.payment==="approved","Template: payment update to Ravin",t.error||label(t.payment))}
-                  {(t.referral==="missing"||t.payment==="missing")&&(
+                  {row(t.missed==="approved","Template: missed-call message to clients",t.error||label(t.missed))}
+                  {(t.referral==="missing"||t.payment==="missing"||t.missed==="missing")&&(
                     <button onClick={async()=>{ const r=await act("create_referral_template",{},"Templates sent to WhatsApp for approval"); if(r) openSetup(); }} disabled={busy}
                       style={btn(GREEN,"#fff",{marginTop:8,padding:"8px 12px",fontSize:13})}>Create the templates</button>
                   )}
-                  {[t.referral,t.payment].some(x=>String(x||"").startsWith("pending"))&&<div style={{fontSize:12,color:MID_GREY,marginTop:4}}>WhatsApp is reviewing them, usually within minutes, sometimes up to a day.</div>}
+                  {[t.referral,t.payment,t.missed].some(x=>String(x||"").startsWith("pending"))&&<div style={{fontSize:12,color:MID_GREY,marginTop:4}}>WhatsApp is reviewing them, usually within minutes, sometimes up to a day.</div>}
                 </>
               );
             })()}
+
+            <div style={{marginTop:18,fontWeight:700,color:BLUE,fontSize:14}}>Missed calls</div>
+            <div style={{fontSize:12,color:MID_GREY,marginBottom:6}}>
+              When a call to the business phone is missed, the chat appears here with "Sorry we missed your call" ready to approve. Saved contacts (like lorry drivers) and staff are skipped.
+              On the business phone, in the MacroDroid app, make a macro: trigger <b>Call Missed</b> (Non-contacts), action <b>HTTP Request</b> (GET) to this link with <b>[call_number]</b> added at the end:
+            </div>
+            {setup.missed_call_url&&(
+              <div style={{display:"flex",gap:8,alignItems:"center"}}>
+                <input readOnly value={setup.missed_call_url+"[call_number]"} onFocus={e=>e.target.select()}
+                  style={{flex:1,minWidth:0,padding:8,fontSize:12,borderRadius:6,border:"1px solid #ccc",fontFamily:"monospace"}}/>
+                <button onClick={async()=>{ try{ await navigator.clipboard.writeText(setup.missed_call_url+"[call_number]"); setInfo("Link copied"); }catch{ setError("Couldn't copy: select the link and copy it"); } }}
+                  style={btn(BLUE,"#fff",{padding:"8px 12px",fontSize:13})}>Copy</button>
+              </div>
+            )}
+            <div style={{fontSize:12,color:MID_GREY,marginTop:4}}>Keep this link private. Missed WhatsApp calls: a second macro with trigger <b>Notification Received</b> (WhatsApp Business, text contains "Missed") and the same link with <b>[notification_title]</b> at the end and <b>&amp;kind=whatsapp</b>.</div>
 
             <div style={{marginTop:18,fontWeight:700,color:BLUE,fontSize:14}}>Facebook ads</div>
             <div style={{fontSize:12,color:MID_GREY,marginBottom:6}}>Ads clients have come from. Tell the bot what each one shows, and it quotes that for every client from the ad.</div>

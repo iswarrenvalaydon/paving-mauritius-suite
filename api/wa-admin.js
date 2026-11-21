@@ -1,6 +1,6 @@
 // Everything the Suite's WhatsApp tab does goes through here, protected by the SUITE_PASSWORD
 // set in Vercel. The browser never sees the WhatsApp, Claude or Supabase secret keys.
-const { db, hookToken, safeEqual, d360, sendText, downloadMedia, uploadMedia, sendDocument, insertDraft, getSetting, setSetting, logEvent } = require("./_lib/common");
+const { db, hookToken, missedCallToken, safeEqual, d360, sendText, downloadMedia, uploadMedia, sendDocument, insertDraft, getSetting, setSetting, logEvent } = require("./_lib/common");
 const { draftReply, draftRow } = require("./_lib/drafter");
 const { latestAd, getAds, describeAd, deleteAd } = require("./_lib/ads");
 
@@ -91,6 +91,11 @@ const TEMPLATES = {
     body: "Hello bro, payment update for the client we referred to you.\nClient: {{1}}\nNumber: {{2}}\nPayment: {{3}}\nArea given to us: {{4}}\nIf the area on site is different, please let us know before delivery. Thank you!",
     example: ["Jean Dupont", "+230 5762 9412", "Paid in full", "20 m2"],
   },
+  missed: {
+    name: "missed_call",
+    body: "Hello, this is Paving Mauritius Ltd. Sorry we missed your call! How can we help you? You can reply here on WhatsApp.",
+    example: null,
+  },
 };
 const PAYMENT_STATUSES = ["Deposit paid", "Half paid", "Fully paid"];
 
@@ -114,7 +119,7 @@ async function createMissingTemplates() {
       method: "POST",
       body: {
         name: t.name, category: "UTILITY", language: "en", allow_category_change: true,
-        components: [{ type: "BODY", text: t.body, example: { body_text: [t.example] } }],
+        components: [{ type: "BODY", text: t.body, ...(t.example ? { example: { body_text: [t.example] } } : {}) }],
       },
     });
     created.push(t.name);
@@ -233,6 +238,24 @@ async function send(waId, body, draftId) {
   if (!parts.length && !attach) throw new Error("Message is empty");
   const ids = [];
   try {
+    if (draft?.quote?.template === "missed_call") {
+      // The caller may never have written to us: outside the 24-hour window only the approved template can go.
+      const { data: c } = await db().from("wa_contacts").select("last_inbound_at").eq("wa_id", waId).maybeSingle();
+      const open = c?.last_inbound_at && Date.now() - new Date(c.last_inbound_at) < 23 * 3600 * 1000;
+      if (!open) {
+        const t = TEMPLATES.missed;
+        const data = await d360("/messages", {
+          method: "POST",
+          body: { messaging_product: "whatsapp", recipient_type: "individual", to: waId, type: "template", template: { name: t.name, language: { code: "en" } } },
+        });
+        const id = data?.messages?.[0]?.id || `local-${Date.now()}`;
+        await storeOut(waId, id, "template", t.body);
+        const now = new Date().toISOString();
+        await db().from("wa_contacts").update({ last_message_at: now, unread: 0 }).eq("wa_id", waId);
+        await db().from("wa_drafts").update({ status: "sent", body: t.body, decided_at: now }).eq("id", draftId);
+        return { ok: true, ids: [id] };
+      }
+    }
     for (let i = 0; i < parts.length; i += 1) {
       if (i > 0) await sleep(6500); // WhatsApp allows about one message every 6 seconds to the same person
       const id = await sendText(waId, parts[i]);
@@ -261,7 +284,7 @@ async function send(waId, body, draftId) {
     await db().from("wa_drafts").update({ status: "superseded", decided_at: now }).eq("wa_id", waId).eq("status", "pending").neq("id", draftId || 0);
     if (draftId) {
       await db().from("wa_drafts").update({ status: "sent", body: sentText, decided_at: now }).eq("id", draftId);
-      try { await learnFrom(waId, suggested, sentText); } catch { /* learning must never block sending */ }
+      if (!draft?.quote?.template) { try { await learnFrom(waId, suggested, sentText); } catch { /* learning must never block sending */ } }
     }
     return { ok: true, ids, warning, referral_sent: referralSent };
   } catch (err) {
@@ -365,6 +388,7 @@ async function status(req) {
     out.examples = await getSetting("examples", []);
     out.ads = Object.entries(await getAds()).map(([key, a]) => ({ key, ...a })).sort((a, b) => String(b.first_seen || "").localeCompare(String(a.first_seen || "")));
     out.ravin_number = await getSetting("ravin_number", "");
+    out.missed_call_url = `${siteUrl(req)}/api/missed-call?token=${missedCallToken()}&number=`;
     out.tables = true;
   } catch (err) { out.tables = false; out.table_error = String(err.message || err); }
   try { out.templates = await templateStatuses(); }

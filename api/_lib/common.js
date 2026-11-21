@@ -24,6 +24,10 @@ function hookToken() {
   return crypto.createHash("sha256").update(seed).digest("hex").slice(0, 40);
 }
 
+function missedCallToken() {
+  const seed = `${process.env.D360_API_KEY || ""}|${process.env.SUPABASE_SECRET_KEY || ""}|missed-call`;
+  return crypto.createHash("sha256").update(seed).digest("hex").slice(0, 32);
+}
 function safeEqual(a, b) {
   const x = Buffer.from(String(a || ""));
   const y = Buffer.from(String(b || ""));
@@ -142,4 +146,4 @@ function fmtTime(iso) {
   return new Date(iso).toLocaleString("en-GB", { timeZone: TZ, weekday: "short", day: "2-digit", month: "short", hour: "2-digit", minute: "2-digit" });
 }
 
-module.exports = { db, hookToken, safeEqual, d360, sendText, downloadMedia, uploadMedia, sendDocument, insertDraft, getSetting, setSetting, logEvent, fmtTime, TZ };
+module.exports = { db, hookToken, missedCallToken, safeEqual, d360, sendText, downloadMedia, uploadMedia, sendDocument, insertDraft, getSetting, setSetting, logEvent, fmtTime, TZ };
