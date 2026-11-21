@@ -75,7 +75,7 @@ async function deleteAd(key) {
 function adPrompt(ad, info) {
   if (!ad) return "";
   if (info && info.design) {
-    return `This client came from our Facebook ad "${ad.label}". The team says this ad shows: ${info.design}. That is exactly what the client wants (product, sizes, colours, design): when they send measurements, give the estimate for it straight away and never ask which slab, size or colour.`;
+    return `This client came from our Facebook ad "${ad.label}". The team says this ad shows: ${info.design}. That is what the client wants (product, sizes, colours, design) unless they say they want something else (e.g. "Other paving slabs"): when they send measurements, give the estimate for it straight away and never ask which slab, size or colour.`;
   }
   return `This client came from our Facebook ad "${ad.label}", but the team hasn't told you yet what this ad's picture shows. For a first reply, thank them and ask for their measurements as usual (name the product only as the ad text does). If they have already sent measurements, don't ask the client which slab, size or colour: give the area and set needs_team so the team can tell you what the ad shows.`;
 }
