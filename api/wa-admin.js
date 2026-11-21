@@ -46,7 +46,11 @@ async function getChat(waId) {
   const list = (messages || []).reverse();
   const ad = latestAd(list);
   const ads = ad ? await getAds() : {};
-  return { contact, messages: list, draft: drafts?.[0] || null, referral: await getReferral(waId), money: await paymentSummary(waId), ad: ad ? { ...ad, design: ads[ad.key]?.design || "" } : null };
+  const design = ad ? ads[ad.key]?.design || "" : "";
+  let draft = drafts?.[0] || null;
+  // The "new ad" warning is out of date once the team has described the ad.
+  if (draft && design && draft.team_note) draft = { ...draft, team_note: draft.team_note.replace(/📢 New ad: tell the bot what's in it \(box above\), then it can quote\.\s*/, "").trim() || null };
+  return { contact, messages: list, draft, referral: await getReferral(waId), money: await paymentSummary(waId), ad: ad ? { ...ad, design } : null };
 }
 
 const LATE = "This client last wrote more than 24 hours ago, so WhatsApp won't let us send a normal message. Reply from the phone instead, or wait for the client to write again.";
