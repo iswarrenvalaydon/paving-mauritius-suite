@@ -418,8 +418,12 @@ export default function WhatsAppInbox(){
                   );
                 })()}
                 <div style={{fontSize:10,color:MID_GREY,textAlign:"right",marginTop:3}}>
-                  {[sourceLabel(m),when(m.sent_at),m.status==="failed"?"⚠️ not delivered":"",m.status==="resent"?"↻ resent":""].filter(Boolean).join(" · ")}
+                  {[sourceLabel(m),when(m.sent_at),m.status==="failed"?"⚠️ not delivered":"",m.status==="no_whatsapp"?"⚠️ not on WhatsApp":"",m.status==="resent"?"↻ resent":""].filter(Boolean).join(" · ")}
                 </div>
+                {m.direction==="out"&&(m.status==="no_whatsapp"||(m.status==="failed"&&m.type==="template"))&&m.body&&(
+                  <a href={`sms:+${selected}?body=${encodeURIComponent(m.body)}`}
+                    style={{...btn("#fff",BLUE,{border:`1px solid ${BLUE}`,padding:"4px 10px",fontSize:12,marginTop:4,marginLeft:6}),display:"inline-block",textDecoration:"none"}}>📱 Send as SMS</a>
+                )}
                 {m.direction==="out"&&m.status==="failed"&&m.type==="text"&&(
                   <button disabled={busy} onClick={async()=>{ const r=await act("resend",{message_id:m.id},"↻ Sent again"); if(r) loadChat(selected); }}
                     style={btn("#fff","#B00020",{border:"1px solid #B00020",padding:"4px 10px",fontSize:12,marginTop:4})}>↻ Resend</button>

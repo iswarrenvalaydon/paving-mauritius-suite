@@ -149,7 +149,9 @@ async function handle(body) {
         }
       }
       for (const s of value.statuses || []) {
-        await db().from("wa_messages").update({ status: s.status }).eq("id", s.id);
+        // 131026 = can't be delivered on WhatsApp (usually the number has no WhatsApp).
+        const noWhatsApp = s.status === "failed" && (s.errors || []).some((e) => Number(e.code) === 131026);
+        await db().from("wa_messages").update({ status: noWhatsApp ? "no_whatsapp" : s.status }).eq("id", s.id);
         if (s.status === "failed") {
           await logEvent("send_failed", s);
           const rateLimited = (s.errors || []).some((e) => Number(e.code) === 131056 || Number(e.code) === 130429);
