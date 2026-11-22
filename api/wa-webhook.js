@@ -35,7 +35,9 @@ function bodyOf(m) {
       // WhatsApp doesn't pass some messages on to the Suite, especially a client's very first message
       // after tapping a Facebook ad (coexistence). The message is still on the business phone.
       const kind = m.unsupported?.type;
-      return `[Message not passed on by WhatsApp${kind && kind !== "unknown" ? ` (${kind})` : ""}: see the business phone]`;
+      const code = (m.errors || [])[0]?.code;
+      const why = [kind && kind !== "unknown" ? kind : "", code ? `code ${code}` : ""].filter(Boolean).join(", ");
+      return `[Message not passed on by WhatsApp${why ? ` (${why})` : ""}: see the business phone]`;
     }
     default: return `[${m.type || "message"}]`;
   }
@@ -141,6 +143,7 @@ async function handle(body) {
           id: m.id, wa_id: digits(m.from), direction: "in", source: "client", type: m.type,
           body: adOf(m) + bodyOf(m), media_id: mediaIdOf(m), sent_at: isoFromTs(m.timestamp),
         })));
+        for (const m of msgs) if (m.type === "unsupported") await logEvent("unsupported", { wa_id: digits(m.from), message: m });
         for (const m of msgs) if (m.referral) {
           await logEvent("ad_referral", { wa_id: digits(m.from), message_id: m.id, referral: m.referral });
           try { await noteAd(m.referral); } catch { /* only for the Setup list */ }
