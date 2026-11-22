@@ -1,6 +1,6 @@
 // Everything the Suite's WhatsApp tab does goes through here, protected by the SUITE_PASSWORD
 // set in Vercel. The browser never sees the WhatsApp, Claude or Supabase secret keys.
-const { db, hookToken, missedCallToken, safeEqual, d360, sendText, downloadMedia, uploadMedia, sendDocument, insertDraft, getSetting, setSetting, logEvent } = require("./_lib/common");
+const { splitReply, replyTarget, db, hookToken, missedCallToken, safeEqual, d360, sendText, downloadMedia, uploadMedia, sendDocument, insertDraft, getSetting, setSetting, logEvent } = require("./_lib/common");
 const { draftReply, draftRow } = require("./_lib/drafter");
 const { latestAd, getAds, describeAd, deleteAd } = require("./_lib/ads");
 
@@ -68,7 +68,10 @@ async function storeOut(waId, id, type, text) {
 }
 
 // When the team changes a suggestion before sending, keep the before/after so the bot learns from it.
-async function learnFrom(waId, draft, sentText) {
+async function learnFrom(waId, rawDraft, rawSent) {
+  const noQuotes = (t) => String(t || "").split(/\n---\n/).map((p) => splitReply(p).text).join("\n---\n");
+  const draft = rawDraft && { ...rawDraft, body: noQuotes(rawDraft.body) };
+  const sentText = noQuotes(rawSent);
   if (!draft || !draft.body || norm(draft.body) === norm(sentText)) return;
   const { data: last } = await db().from("wa_messages").select("body").eq("wa_id", waId).eq("direction", "in").order("sent_at", { ascending: false }).limit(3);
   const client = (last || []).reverse().map((m) => m.body).join(" / ");
@@ -258,8 +261,10 @@ async function send(waId, body, draftId) {
     }
     for (let i = 0; i < parts.length; i += 1) {
       if (i > 0) await sleep(6500); // WhatsApp allows about one message every 6 seconds to the same person
-      const id = await sendText(waId, parts[i]);
-      await storeOut(waId, id, "text", parts[i]);
+      const { quote, text } = splitReply(parts[i]);
+      if (!text) continue;
+      const id = await sendText(waId, text, await replyTarget(waId, quote));
+      await storeOut(waId, id, "text", text);
       ids.push(id);
     }
     if (attach === "price_list") {
@@ -345,8 +350,10 @@ async function sendPdf(waId, { filename, data, caption, draftId, followup, quote
     // Answers to the client's other questions go out after the PDF, as separate messages.
     for (const part of after) {
       await sleep(6500);
-      const mid = await sendText(waId, part);
-      await storeOut(waId, mid, "text", part);
+      const { quote, text } = splitReply(part);
+      if (!text) continue;
+      const mid = await sendText(waId, text, await replyTarget(waId, quote));
+      await storeOut(waId, mid, "text", text);
     }
     let warning = null;
     let referralSent = false;

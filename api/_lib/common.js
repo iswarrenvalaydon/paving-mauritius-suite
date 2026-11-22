@@ -56,12 +56,12 @@ async function d360(path, { method = "GET", body } = {}) {
 
 // WhatsApp allows about 1 message every 6 seconds to the same person (error 131056 if faster),
 // so retry rate-limit errors with a growing wait before giving up.
-async function sendText(to, body) {
+async function sendText(to, body, replyTo) {
   const waits = [0, 4000, 8000];
   let lastErr;
   for (const wait of waits) {
     if (wait) await new Promise((r) => setTimeout(r, wait));
-    try { return await sendTextOnce(to, body); }
+    try { return await sendTextOnce(to, body, replyTo); }
     catch (err) {
       lastErr = err;
       const raw = JSON.stringify(err.data || "") + String(err.message || "");
@@ -71,11 +71,16 @@ async function sendText(to, body) {
   throw lastErr;
 }
 
-async function sendTextOnce(to, body) {
+async function sendTextOnce(to, body, replyTo) {
   const data = await d360("/messages", {
     method: "POST",
     // Show the link preview (map picture, Facebook page) whenever the message contains a link.
-    body: { messaging_product: "whatsapp", recipient_type: "individual", to, type: "text", text: { body, preview_url: /https?:\/\//i.test(body) } },
+    // replyTo: the client's message id, so WhatsApp shows our answer as a reply quoting it.
+    body: {
+      messaging_product: "whatsapp", recipient_type: "individual", to, type: "text",
+      ...(replyTo ? { context: { message_id: replyTo } } : {}),
+      text: { body, preview_url: /https?:\/\//i.test(body) },
+    },
   });
   return data?.messages?.[0]?.id || `local-${Date.now()}`;
 }
@@ -146,4 +151,24 @@ function fmtTime(iso) {
   return new Date(iso).toLocaleString("en-GB", { timeZone: TZ, weekday: "short", day: "2-digit", month: "short", hour: "2-digit", minute: "2-digit" });
 }
 
-module.exports = { db, hookToken, missedCallToken, safeEqual, d360, sendText, downloadMedia, uploadMedia, sendDocument, insertDraft, getSetting, setSetting, logEvent, fmtTime, TZ };
+// A suggested message can start with a line "↩ <client's words>": it is sent as a reply quoting
+// that client message. The line itself never goes to the client.
+const REPLY_MARK = "↩ ";
+function quoteSnippet(body) {
+  const text = String(body || "").replace(/^\[From Facebook (?:ad|post)[^\]]*\]\s*/, "").replace(/\s+/g, " ").trim();
+  return text.length > 60 ? `${text.slice(0, 57)}…` : text;
+}
+function splitReply(part) {
+  const m = /^↩ ?([^\n]*)\n([\s\S]*)$/.exec(String(part || ""));
+  return m ? { quote: m[1].trim(), text: m[2].trim() } : { quote: "", text: String(part || "").trim() };
+}
+// Finds the client message a "↩" line points at (newest first).
+async function replyTarget(waId, quote) {
+  if (!quote) return null;
+  const { data } = await db().from("wa_messages").select("id,body,direction").eq("wa_id", waId).eq("direction", "in").order("sent_at", { ascending: false }).limit(60);
+  const norm = (t) => t.replace(/…$/, "").toLowerCase();
+  const q = norm(quote);
+  const hit = (data || []).find((m) => quoteSnippet(m.body) && (norm(quoteSnippet(m.body)) === q || norm(quoteSnippet(m.body)).startsWith(q) || q.startsWith(norm(quoteSnippet(m.body)))));
+  return hit && !String(hit.id).startsWith("call-") ? hit.id : null;
+}
+module.exports = { REPLY_MARK, quoteSnippet, splitReply, replyTarget, db, hookToken, missedCallToken, safeEqual, d360, sendText, downloadMedia, uploadMedia, sendDocument, insertDraft, getSetting, setSetting, logEvent, fmtTime, TZ };

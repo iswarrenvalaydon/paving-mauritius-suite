@@ -28,6 +28,9 @@ function when(iso){
 }
 const BREAK="\n---\n"; // the short messages of one suggestion are joined with this
 function splitParts(t){ const p=String(t||"").split(/\n---\n/); return p.length?p:[""]; }
+// A message can start with "↩ <client's words>\n": it is sent as a WhatsApp reply quoting that message.
+function quoteOf(part){ const m=/^↩ ?([^\n]*)\n([\s\S]*)$/.exec(part||""); return m?{quote:m[1],text:m[2]}:{quote:"",text:part||""}; }
+function withQuote(quote,text){ return quote?`↩ ${quote}\n${text}`:text; }
 function quotesOf(d){
   const x=d&&d.quote;
   if(!x) return [];
@@ -519,16 +522,25 @@ export default function WhatsAppInbox(){
               </>
             ):(
               <>
-                {splitParts(draftText).map((part,i,all)=>(
+                {splitParts(draftText).map((part,i,all)=>{ const q=quoteOf(part); return(
                   <div key={i} style={{display:"flex",gap:6,alignItems:"flex-start",marginBottom:6}}>
-                    <textarea value={part} rows={Math.min(8,Math.max(2,Math.ceil(part.length/38)))}
-                      onChange={e=>{ const p=[...all]; p[i]=e.target.value; setDraftText(p.join(BREAK)); }}
-                      placeholder={all.length===1?"(The bot suggests no reply. Write one here if needed.)":"Message"}
-                      style={{flex:1,boxSizing:"border-box",padding:10,fontSize:14,borderRadius:8,border:"1px solid #ccc",fontFamily:"inherit",background:"#fff"}}/>
+                    <div style={{flex:1,minWidth:0}}>
+                      {q.quote&&(
+                        <div style={{display:"flex",alignItems:"center",gap:6,background:"#f0f0f0",borderLeft:`3px solid ${GREEN}`,borderRadius:6,padding:"4px 8px",marginBottom:3,fontSize:12,color:"#555"}}>
+                          <span style={{flex:1,minWidth:0,overflow:"hidden",textOverflow:"ellipsis",whiteSpace:"nowrap"}}>↩ Replying to: "{q.quote}"</span>
+                          <button onClick={()=>{ const p=[...all]; p[i]=q.text; setDraftText(p.join(BREAK)); }} title="Send without quoting"
+                            style={{background:"none",border:"none",color:"#B00020",cursor:"pointer",fontSize:12,padding:0}}>✖</button>
+                        </div>
+                      )}
+                      <textarea value={q.text} rows={Math.min(8,Math.max(2,Math.ceil(q.text.length/38)))}
+                        onChange={e=>{ const p=[...all]; p[i]=withQuote(q.quote,e.target.value); setDraftText(p.join(BREAK)); }}
+                        placeholder={all.length===1?"(The bot suggests no reply. Write one here if needed.)":"Message"}
+                        style={{width:"100%",boxSizing:"border-box",padding:10,fontSize:14,borderRadius:8,border:"1px solid #ccc",fontFamily:"inherit",background:"#fff"}}/>
+                    </div>
                     {all.length>1&&<button onClick={()=>setDraftText(all.filter((_,j)=>j!==i).join(BREAK))} title="Remove this message"
                       style={btn("#fff","#B00020",{padding:"6px 9px",border:"1px solid #B00020"})}>✖</button>}
                   </div>
-                ))}
+                );})}
                 {draft.quote&&draft.quote.attach==="price_list"&&<div style={{fontSize:13,color:BLUE,marginBottom:6}}>📎 The price list PDF is sent after the message.</div>}
                 {draft.quote&&draft.quote.referral&&(
                   <div style={{fontSize:13,color:BLUE,marginBottom:6}}>
@@ -537,7 +549,7 @@ export default function WhatsAppInbox(){
                 )}
                 <div style={{display:"flex",gap:8,flexWrap:"wrap",marginTop:4}}>
                   <button onClick={()=>sendMessage(draftText,draft.id)} disabled={busy} style={btn(GREEN,"#fff")}>
-                    {busy?"…":splitParts(draftText).filter(t=>t.trim()).length>1?`✅ Send ${splitParts(draftText).filter(t=>t.trim()).length} messages`:"✅ Send"}
+                    {busy?"…":splitParts(draftText).filter(t=>quoteOf(t).text.trim()).length>1?`✅ Send ${splitParts(draftText).filter(t=>quoteOf(t).text.trim()).length} messages`:"✅ Send"}
                   </button>
                   <button onClick={()=>setDraftText(draftText+BREAK)} disabled={busy} style={btn("#fff",GREEN,{border:`1px solid ${GREEN}`,padding:"8px 12px",fontSize:13})}>+ Message</button>
                 </div>

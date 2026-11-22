@@ -1,6 +1,6 @@
 // Writes a suggested WhatsApp reply with Claude. Nothing is sent from here:
 // the draft waits in the Suite until Iswarren or JL approves it.
-const { db, getSetting, fmtTime, downloadMedia } = require("./common");
+const { db, getSetting, fmtTime, downloadMedia, REPLY_MARK, quoteSnippet } = require("./common");
 const { RULEBOOK } = require("./rulebook");
 const { checkLine } = require("./products");
 const { getAds, latestAd, adPrompt } = require("./ads");
@@ -48,6 +48,7 @@ ${rulebook}
 
 How to write:
 - FIRST, read EVERY client message since our last reply (there are often several, sent seconds apart) and answer each question or request in this reply. Never answer only the first one. If there are more things to answer than fit in 3 messages, combine them.
+- Client messages are numbered (#1, #2…). When the client sent several messages about different things since our last reply, answer each in its own message and put the number of the client message it answers in "reply_to" (same position as the message), so WhatsApp shows our answer quoting it. Use null for a message that answers nothing in particular (e.g. a thank-you), and leave "reply_to" empty when the client sent only one message.
 - Write like a busy, friendly salesperson on WhatsApp: SHORT separate messages, not one block. Return 1 to 3 messages in "messages"; each one is normally a single sentence or two, under about 200 characters. One question per message, and the question goes last.
 - Language: answer in the language of the client's MOST RECENT messages, even if the chat started in another language. Mauritian Creole (e.g. "mo", "ou kapav", "pou moi", "ena", "kombien") gets Mauritian Creole with the rulebook's spelling; French gets French; English gets English.
 - Plain text only: no markdown, no bullet lists, no headings.
@@ -94,16 +95,17 @@ Current time in Mauritius: ${now}.
 Client: ${contact?.name || contact?.profile_name || "unknown"} (+${contact?.wa_id || ""}).
 
 Reply with ONLY a JSON object, no other text:
-{"messages": ["<short message>", "<short message>"], "needs_team": true|false, "team_note": "<short note or empty>", "attach": null | "price_list",
+{"messages": ["<short message>", "<short message>"], "reply_to": [<client message number this message answers, e.g. 3, or null>, ...], "needs_team": true|false, "team_note": "<short note or empty>", "attach": null | "price_list",
  "referral": null | {"client_name": "", "location": "", "product": "", "area": ""},
  "payment": null | {"amount": 25000, "date": "", "bank": "", "reference": ""},
  "quotes": [] | [{"client_name": "", "location": "", "summary": "", "caption": "Here is your quotation.", "items": [{"desc": "Slabs 600x300x60mm – Light Grey", "qty": 0, "area_m2": 20, "gap_cm": 5, "unit_price_incl_vat": 145}]}]}`;
 }
 
 function transcript(messages, labels) {
+  let n = 0;
   return messages
     .map((m) => {
-      const who = m.direction === "in" ? "Client" : "Paving Mauritius [team]";
+      const who = m.direction === "in" ? `Client (#${++n})` : "Paving Mauritius [team]";
       const tag = labels.get(m.id) ? `${labels.get(m.id)} ` : "";
       return `[${fmtTime(m.sent_at)}] ${who}: ${tag}${m.body || `[${m.type || "message"}]`}`;
     })
@@ -227,8 +229,16 @@ async function draftReply(waId) {
   const rawQuotes = Array.isArray(parsed.quotes) ? parsed.quotes : parsed.quote ? [parsed.quote] : [];
   const quotes = rawQuotes.map(cleanQuote).filter(Boolean).slice(0, 4);
   const quote = quotes.length ? quotes[0] : null;
+  // Client messages are numbered #1, #2… in the transcript; "reply_to" says which one each message answers.
+  const inbound = messages.filter((m) => m.direction === "in");
+  const replyTo = Array.isArray(parsed.reply_to) ? parsed.reply_to : [];
   const parts = (Array.isArray(parsed.messages) ? parsed.messages : [parsed.reply])
-    .map((m) => String(m || "").replace(/\n-{3,}\n/g, "\n").trim())
+    .map((m, i) => {
+      const text = String(m || "").replace(/\n-{3,}\n/g, "\n").replace(/^↩[^\n]*\n/, "").trim();
+      const ref = inbound[Number(String(replyTo[i] ?? "").replace(/\D/g, "")) - 1];
+      const quote = text && ref && !String(ref.id).startsWith("call-") ? quoteSnippet(ref.body) : "";
+      return quote ? `${REPLY_MARK}${quote}\n${text}` : text;
+    })
     .filter(Boolean)
     .slice(0, 3);
   return {
