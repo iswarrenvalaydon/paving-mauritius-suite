@@ -31,6 +31,12 @@ function bodyOf(m) {
     case "reaction": return `[Reaction ${m.reaction?.emoji || ""}]`;
     case "button": return m.button?.text || "[Button]";
     case "interactive": return m.interactive?.button_reply?.title || m.interactive?.list_reply?.title || "[Interactive]";
+    case "unsupported": {
+      // WhatsApp doesn't pass some messages on to the Suite, especially a client's very first message
+      // after tapping a Facebook ad (coexistence). The message is still on the business phone.
+      const kind = m.unsupported?.type;
+      return `[Message not passed on by WhatsApp${kind && kind !== "unknown" ? ` (${kind})` : ""}: see the business phone]`;
+    }
     default: return `[${m.type || "message"}]`;
   }
 }
