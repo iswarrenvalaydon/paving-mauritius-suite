@@ -7,6 +7,7 @@ const DESIGNS=[
   "Two-colour design – 600x300 Light Grey + 300x300 Dark Grey",
   "Slabs 600x300 Dark Grey + 300x300 Light Grey",
   "Slabs 600x300 – Light Grey + Dark Grey",
+  "Slabs 600x300 – Light Grey + Dark Grey, 5 cm gap with grass",
   "Slabs 600x300 – Light Grey + Terracotta, 2.5 cm gap",
   "Slabs 600x300 Light Grey with Pavers 60mm Dark Grey border",
   "Slabs 450x450x60mm – Light Grey, 2.5 cm gap with crushed coral",
