@@ -9,6 +9,7 @@ const DESIGNS=[
   "Slabs 600x300 – Light Grey + Dark Grey",
   "Slabs 600x300 – Light Grey + Terracotta, 2.5 cm gap",
   "Slabs 600x300 Light Grey with Pavers 60mm Dark Grey border",
+  "Slabs 450x450x60mm – Light Grey, 2.5 cm gap with crushed coral",
   "Laying patterns","Finished driveways",
 ];
 const ALBUM_CHOICES=[...PRODUCT_OPTIONS.map(p=>p.desc),...DESIGNS];
