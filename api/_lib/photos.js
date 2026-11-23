@@ -10,9 +10,21 @@ const MAX_PER_ALBUM = 3; // photos sent per album
 const clean = (t) => String(t || "").replace(/\s+/g, " ").trim();
 const slug = (t) => clean(t).toLowerCase().normalize("NFD").replace(/[̀-ͯ]/g, "").replace(/[^a-z0-9]+/g, "-").replace(/^-|-$/g, "").slice(0, 60) || "album";
 
-async function getPhotos() {
+// Photos that ship with the Suite (in /public/photos), shown like uploaded ones; deleting one hides it.
+const SEED = require("./photo-seed.json");
+function siteUrl() {
+  return `https://${process.env.VERCEL_PROJECT_PRODUCTION_URL || "paving-mauritius-suite.vercel.app"}`;
+}
+
+async function uploadedPhotos() {
   const list = await getSetting("photos", []);
   return Array.isArray(list) ? list : [];
+}
+
+async function getPhotos() {
+  const hidden = new Set(await getSetting("photos_hidden", []));
+  const seed = SEED.filter((p) => !hidden.has(p.id)).map((p) => ({ id: p.id, album: p.album, url: `${siteUrl()}/photos/${p.file}`, builtin: true }));
+  return [...seed, ...await uploadedPhotos()];
 }
 
 // Albums with their photo counts, in a stable order.
@@ -47,14 +59,19 @@ async function addPhoto(album, base64, mime = "image/jpeg") {
   if (error) throw new Error(`Upload failed: ${error.message}`);
   const { data } = db().storage.from(BUCKET).getPublicUrl(path);
   const photo = { id: crypto.randomUUID(), album: name, path, url: data.publicUrl, added: new Date().toISOString() };
-  const list = await getPhotos();
+  const list = await uploadedPhotos();
   list.push(photo);
   await setSetting("photos", list);
   return photo;
 }
 
 async function deletePhoto(id) {
-  const list = await getPhotos();
+  if (String(id).startsWith("seed-")) {
+    const hidden = await getSetting("photos_hidden", []);
+    if (!hidden.includes(id)) await setSetting("photos_hidden", [...hidden, id]);
+    return;
+  }
+  const list = await uploadedPhotos();
   const photo = list.find((p) => p.id === id);
   if (!photo) return;
   await db().storage.from(BUCKET).remove([photo.path]);

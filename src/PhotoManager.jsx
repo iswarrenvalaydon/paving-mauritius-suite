@@ -3,7 +3,14 @@ import { PRODUCT_OPTIONS } from "./products";
 
 // Product photos for the WhatsApp bot, grouped in albums (one per product and colour, or a design).
 const BLUE="#1F4E79", GREEN="#2E7D32", MID_GREY="#666";
-const DESIGNS=["Two-colour design – 600x300 Light Grey + 300x300 Dark Grey","Laying patterns","Finished driveways"];
+const DESIGNS=[
+  "Two-colour design – 600x300 Light Grey + 300x300 Dark Grey",
+  "Slabs 600x300 Dark Grey + 300x300 Light Grey",
+  "Slabs 600x300 – Light Grey + Dark Grey",
+  "Slabs 600x300 – Light Grey + Terracotta, 2.5 cm gap",
+  "Slabs 600x300 Light Grey with Pavers 60mm Dark Grey border",
+  "Laying patterns","Finished driveways",
+];
 const ALBUM_CHOICES=[...PRODUCT_OPTIONS.map(p=>p.desc),...DESIGNS];
 const OTHER="Other…";
 const btn=(bg,fg,extra={})=>({background:bg,color:fg,border:"none",borderRadius:8,padding:"8px 12px",cursor:"pointer",fontWeight:600,fontSize:13,...extra});
