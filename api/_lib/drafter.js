@@ -98,7 +98,7 @@ Current time in Mauritius: ${now}.
 Client: ${contact?.name || contact?.profile_name || "unknown"} (+${contact?.wa_id || ""}).
 
 Reply with ONLY a JSON object, no other text:
-{"messages": ["<short message>", "<short message>"], "reply_to": [<client message number this message answers, e.g. 3, or null>, ...], "needs_team": true|false, "team_note": "<short note or empty>", "attach": null | "price_list", "photos": [<album names to send, or empty>],
+{"messages": ["<short message>", "<short message>"], "reply_to": [<client message number this message answers, e.g. 3, or null>, ...], "needs_team": true|false, "team_note": "<short note or empty>", "attach": null | "price_list", "photos": [<album names to send, or empty>], "photo_mode": "album" | "designs", "photos_after": "<message sent after the photos, or empty>",
  "referral": null | {"client_name": "", "location": "", "product": "", "area": ""},
  "payment": null | {"amount": 25000, "date": "", "bank": "", "reference": ""},
  "quotes": [] | [{"client_name": "", "location": "<street address>", "city": "", "brn": "", "vat_no": "", "email": "", "summary": "", "caption": "Here is your quotation.", "items": [{"desc": "Slabs 600x300x60mm – Light Grey", "qty": 0, "area_m2": 20, "gap_cm": 5, "unit_price_incl_vat": 145}]}]}`;
@@ -252,7 +252,10 @@ async function draftReply(waId) {
     quote,
     quotes,
     attach: parsed.attach === "price_list" ? "price_list" : null,
-    photos: await knownAlbums(parsed.photos).catch(() => []),
+    // "designs": one photo of each of several designs, then a question such as "Which one do you like?".
+    photo_mode: parsed.photo_mode === "designs" ? "designs" : "album",
+    photos: await knownAlbums(parsed.photos, parsed.photo_mode === "designs" ? 4 : 2).catch(() => []),
+    photos_after: String(parsed.photos_after || "").trim().slice(0, 300),
     referral: cleanReferral(parsed.referral),
     payment: cleanPayment(parsed.payment),
   };
@@ -277,14 +280,20 @@ function cleanReferral(r) {
 function photoPrompt(list) {
   if (!list || !list.length) return 'Photo albums: none uploaded yet. If the client asks for photos, say "I\'ll send you some photos." and set needs_team so the team sends them.';
   return `Photo albums we can send (exact names): ${list.map((a) => `"${a.album}"`).join(", ")}.
-When the client asks for photos or pictures, or wants to see what a product or colour looks like, put the matching album name(s) in "photos" (at most 2) and write one short line such as "Here are some photos of our 600x300 slabs in Light Grey." (in the client's language). The photos go out after your messages. Don't send photos the client didn't ask for. If no album matches, say "I'll send you some photos." and set needs_team.`;
+Send photos whenever the client asks for photos or pictures, OR asks what our pavers, slabs, cobbles or a colour look like ("what are your slabs like?", "ki zot slab ressemble?", "c'est comment vos pavés?"): showing beats describing. For one product: put its album name(s) in "photos" (at most 2; Light Grey if they named no colour), "photo_mode": "album", and one short line before, e.g. "Here are some photos of our 600x300 slabs in Light Grey.". The photos go out after your messages.
+When the client asks about designs or patterns, or wants slabs/pavers "as per design" / "with a design" without choosing one: "photo_mode": "designs", put 3 or 4 DIFFERENT design albums in "photos" (one photo of each is sent, labelled with its name), a short line before such as "Here are some of our designs:", and "photos_after": "Which one do you like?" (in the client's language).
+Don't send photos the client didn't ask for and that don't answer their question. If no album matches, say "I'll send you some photos." and set needs_team.`;
 }
 
 // Builds the row saved in wa_drafts. Extras (quotation, attachment) live in the "quote" column.
 function draftRow(waId, replyTo, draft) {
   const extras = draft.quotes && draft.quotes.length ? { quotes: draft.quotes } : {};
   if (draft.attach) extras.attach = draft.attach;
-  if (draft.photos && draft.photos.length) extras.photos = draft.photos;
+  if (draft.photos && draft.photos.length) {
+    extras.photos = draft.photos;
+    if (draft.photo_mode === "designs") extras.photo_mode = "designs";
+    if (draft.photos_after) extras.photos_after = draft.photos_after;
+  }
   if (draft.referral) extras.referral = draft.referral;
   if (draft.payment) extras.payment = draft.payment;
   return {

@@ -84,7 +84,7 @@ async function albumPhotos(album, max = MAX_PER_ALBUM) {
 }
 
 // Keeps only album names that exist (the bot may misspell one slightly).
-async function knownAlbums(names) {
+async function knownAlbums(names, max = 2) {
   const all = (await albums()).map((a) => a.album);
   const norm = (t) => slug(t);
   const out = [];
@@ -92,7 +92,7 @@ async function knownAlbums(names) {
     const hit = all.find((a) => norm(a) === norm(n)) || all.find((a) => norm(a).includes(norm(n)) || norm(n).includes(norm(a)));
     if (hit && !out.includes(hit)) out.push(hit);
   }
-  return out.slice(0, 2);
+  return out.slice(0, max);
 }
 
 module.exports = { BUCKET, MAX_PER_ALBUM, getPhotos, albums, addPhoto, deletePhoto, albumPhotos, knownAlbums };

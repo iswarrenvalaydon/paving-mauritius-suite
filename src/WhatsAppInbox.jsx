@@ -551,9 +551,12 @@ export default function WhatsAppInbox(){
                 {draft.quote&&Array.isArray(draft.quote.photos)&&draft.quote.photos.map(a=>(
                   <label key={a} style={{display:"flex",alignItems:"center",gap:6,fontSize:13,color:BLUE,marginBottom:6}}>
                     <input type="checkbox" checked={photoSel.includes(a)} onChange={e=>setPhotoSel(e.target.checked?[...photoSel,a]:photoSel.filter(x=>x!==a))}/>
-                    📷 Send photos: {a}
+                    📷 {draft.quote.photo_mode==="designs"?"Send 1 photo of":"Send photos:"} {a}
                   </label>
                 ))}
+                {draft.quote&&draft.quote.photos_after&&photoSel.length>0&&(
+                  <div style={{fontSize:13,color:BLUE,marginBottom:6}}>💬 Then: "{draft.quote.photos_after}"</div>
+                )}
                 {draft.quote&&draft.quote.referral&&(
                   <div style={{fontSize:13,color:BLUE,marginBottom:6}}>
                     📨 Ravin will also get a message: {[draft.quote.referral.client_name||displayName(chat.contact),draft.quote.referral.location,draft.quote.referral.product,draft.quote.referral.area].filter(Boolean).join(" · ")}

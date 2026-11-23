@@ -234,18 +234,22 @@ async function notifyRavin(waId, referral) {
 
 // Sends one suggestion: its short messages in order, then the price list if attached.
 // Sends the photos of one or more albums (a few each), spaced out for WhatsApp's per-person limit.
-async function sendAlbums(waId, names, waitFirst) {
+// oneEach: one photo per album with the album name as caption (to let the client choose a design).
+async function sendAlbums(waId, names, waitFirst, oneEach = false) {
   const ids = [];
   let first = !waitFirst;
   let total = 0;
   for (const album of names) {
-    for (const p of await albumPhotos(album)) {
+    const photos = await albumPhotos(album, oneEach ? 1 : undefined);
+    for (let i = 0; i < photos.length; i += 1) {
+      const p = photos[i];
       if (total >= 4) break;
       if (!first) await sleep(6500);
       first = false;
+      const caption = oneEach && i === 0 ? album.replace(/^Two-colour design – /, "") : "";
       const data = await d360("/messages", {
         method: "POST",
-        body: { messaging_product: "whatsapp", recipient_type: "individual", to: waId, type: "image", image: { link: p.url } },
+        body: { messaging_product: "whatsapp", recipient_type: "individual", to: waId, type: "image", image: { link: p.url, ...(caption ? { caption } : {}) } },
       });
       const id = data?.messages?.[0]?.id || `local-${Date.now()}`;
       await storeOut(waId, id, "image", `[Photo] ${album}`);
@@ -262,7 +266,9 @@ async function send(waId, body, draftId, photosWanted) {
   if (draftId) ({ data: draft } = await db().from("wa_drafts").select("*").eq("id", draftId).maybeSingle());
   const attach = draft?.quote?.attach || null;
   // The team can untick albums the bot suggested; without a list from the Suite, the bot's choice stands.
-  const photoAlbums = await knownAlbums(Array.isArray(photosWanted) ? photosWanted : draft?.quote?.photos || []);
+  const designs = draft?.quote?.photo_mode === "designs";
+  const photoAlbums = await knownAlbums(Array.isArray(photosWanted) ? photosWanted : draft?.quote?.photos || [], designs ? 4 : 2);
+  const photosAfter = String(draft?.quote?.photos_after || "").trim();
   const suggested = draft ? { body: draft.body } : null; // keep the bot's original wording
   if (!parts.length && !attach && !photoAlbums.length) throw new Error("Message is empty");
   const ids = [];
@@ -303,7 +309,16 @@ async function send(waId, body, draftId, photosWanted) {
       await storeOut(waId, id, "document", "[Document Price list.pdf]");
       ids.push(id);
     }
-    if (photoAlbums.length) ids.push(...await sendAlbums(waId, photoAlbums, ids.length > 0));
+    if (photoAlbums.length) {
+      const sentPhotos = await sendAlbums(waId, photoAlbums, ids.length > 0, designs);
+      ids.push(...sentPhotos);
+      if (photosAfter && sentPhotos.length) {
+        await sleep(6500);
+        const id = await sendText(waId, photosAfter);
+        await storeOut(waId, id, "text", photosAfter);
+        ids.push(id);
+      }
+    }
     let warning = null;
     let referralSent = false;
     if (draft?.quote?.referral) {
