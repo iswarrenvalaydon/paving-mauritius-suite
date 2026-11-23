@@ -3,6 +3,7 @@
 const { splitReply, replyTarget, db, hookToken, missedCallToken, safeEqual, d360, sendText, downloadMedia, uploadMedia, sendDocument, insertDraft, getSetting, setSetting, logEvent } = require("./_lib/common");
 const { draftReply, draftRow } = require("./_lib/drafter");
 const { latestAd, getAds, describeAd, deleteAd } = require("./_lib/ads");
+const { albums, addPhoto, deletePhoto, getPhotos, albumPhotos, knownAlbums } = require("./_lib/photos");
 
 const digits = (s) => String(s || "").replace(/\D/g, "");
 const sleep = (ms) => new Promise((r) => setTimeout(r, ms));
@@ -232,13 +233,38 @@ async function notifyRavin(waId, referral) {
 }
 
 // Sends one suggestion: its short messages in order, then the price list if attached.
-async function send(waId, body, draftId) {
+// Sends the photos of one or more albums (a few each), spaced out for WhatsApp's per-person limit.
+async function sendAlbums(waId, names, waitFirst) {
+  const ids = [];
+  let first = !waitFirst;
+  let total = 0;
+  for (const album of names) {
+    for (const p of await albumPhotos(album)) {
+      if (total >= 4) break;
+      if (!first) await sleep(6500);
+      first = false;
+      const data = await d360("/messages", {
+        method: "POST",
+        body: { messaging_product: "whatsapp", recipient_type: "individual", to: waId, type: "image", image: { link: p.url } },
+      });
+      const id = data?.messages?.[0]?.id || `local-${Date.now()}`;
+      await storeOut(waId, id, "image", `[Photo] ${album}`);
+      ids.push(id);
+      total += 1;
+    }
+  }
+  return ids;
+}
+
+async function send(waId, body, draftId, photosWanted) {
   const parts = String(body || "").split(/\n---\n/).map((t) => t.trim()).filter(Boolean);
   let draft = null;
   if (draftId) ({ data: draft } = await db().from("wa_drafts").select("*").eq("id", draftId).maybeSingle());
   const attach = draft?.quote?.attach || null;
+  // The team can untick albums the bot suggested; without a list from the Suite, the bot's choice stands.
+  const photoAlbums = await knownAlbums(Array.isArray(photosWanted) ? photosWanted : draft?.quote?.photos || []);
   const suggested = draft ? { body: draft.body } : null; // keep the bot's original wording
-  if (!parts.length && !attach) throw new Error("Message is empty");
+  if (!parts.length && !attach && !photoAlbums.length) throw new Error("Message is empty");
   const ids = [];
   try {
     if (draft?.quote?.template === "missed_call") {
@@ -277,6 +303,7 @@ async function send(waId, body, draftId) {
       await storeOut(waId, id, "document", "[Document Price list.pdf]");
       ids.push(id);
     }
+    if (photoAlbums.length) ids.push(...await sendAlbums(waId, photoAlbums, ids.length > 0));
     let warning = null;
     let referralSent = false;
     if (draft?.quote?.referral) {
@@ -424,7 +451,17 @@ module.exports = async function handler(req, res) {
       case "status": return res.json(await status(req));
       case "chats": return res.json({ chats: await listChats(), bot_enabled: await getSetting("bot_enabled", true) });
       case "chat": return res.json(await getChat(waId));
-      case "send": return res.json(await send(waId, body, draftId));
+      case "send": return res.json(await send(waId, body, draftId, req.body.photos));
+      case "photos": return res.json({ albums: await albums(), photos: await getPhotos() });
+      case "upload_photo": return res.json({ ok: true, photo: await addPhoto(req.body.album, req.body.data, req.body.mime) });
+      case "delete_photo": await deletePhoto(String(value || "")); return res.json({ ok: true });
+      case "send_photos": {
+        const names = await knownAlbums([value]);
+        if (!names.length) throw new Error("That album has no photos");
+        const ids = await sendAlbums(waId, names, false);
+        await db().from("wa_contacts").update({ last_message_at: new Date().toISOString(), unread: 0 }).eq("wa_id", waId);
+        return res.json({ ok: true, ids });
+      }
       case "referral_payment": return res.json({ ok: true, referral: await sendPaymentUpdate(waId, value) });
       case "send_pdf": {
         const r = await sendPdf(waId, { filename: req.body.filename, data: req.body.data, caption: body, draftId, followup: req.body.followup, quoteIndex: req.body.quote_index, ref: req.body.ref });

@@ -1,5 +1,6 @@
 import { useState, useEffect, useCallback, useRef } from "react";
 import QuoteEditor from "./QuoteEditor";
+import PhotoManager from "./PhotoManager";
 
 // WhatsApp tab: chats on 5725 4201, the bot's suggested replies, and approve / edit / discard.
 // All data goes through /api/wa-admin, which checks the Suite password set in Vercel.
@@ -62,6 +63,8 @@ export default function WhatsAppInbox(){
   const [selected,setSelected]=useState(null);
   const [chat,setChat]=useState(null);
   const [draftText,setDraftText]=useState("");
+  const [photoSel,setPhotoSel]=useState([]); // photo albums the bot suggested, still ticked
+  const [albumList,setAlbumList]=useState(null); // for "Send photos" in a chat
   const [manualText,setManualText]=useState("");
   const [busy,setBusy]=useState(false);
   const [error,setError]=useState("");
@@ -109,6 +112,7 @@ export default function WhatsAppInbox(){
       if(newDraftId!==draftIdRef.current){
         draftIdRef.current=newDraftId;
         setDraftText(data.draft?data.draft.body||"":"");
+        setPhotoSel(data.draft&&data.draft.quote&&Array.isArray(data.draft.quote.photos)?data.draft.quote.photos:[]);
       }
       setError("");
     }catch(e){ setError(e.message); }
@@ -159,17 +163,17 @@ export default function WhatsAppInbox(){
   }
 
   function openChat(waId){
-    setSelected(waId); setChat(null); setView("chat"); setMedia({}); setQuoteOpen(false); setPayAmount(""); setAdInput(""); setAdEdit(false);
+    setSelected(waId); setChat(null); setView("chat"); setMedia({}); setQuoteOpen(false); setPayAmount(""); setAdInput(""); setAdEdit(false); setAlbumList(null);
     draftIdRef.current=null; setDraftText(""); setManualText(""); setInfo("");
     loadChat(waId);
   }
 
   async function sendMessage(text,draftId){
-    const attach=Boolean(draftId&&chat&&chat.draft&&chat.draft.quote&&chat.draft.quote.attach);
+    const attach=Boolean(draftId&&chat&&chat.draft&&chat.draft.quote&&chat.draft.quote.attach)||Boolean(draftId&&photoSel.length);
     if(!text.replace(/-{3}/g,"").trim()&&!attach) return;
     setBusy(true); setError(""); setInfo("");
     try{
-      const r=await api("send",{wa_id:selected,body:text,draft_id:draftId||null});
+      const r=await api("send",{wa_id:selected,body:text,draft_id:draftId||null,...(draftId?{photos:photoSel}:{})});
       setInfo(r&&r.referral_sent?"✅ Sent, and Ravin has been told":"✅ Sent");
       if(r&&r.warning) setError(r.warning);
       if(draftId){ draftIdRef.current=null; setDraftText(""); } else setManualText("");
@@ -341,6 +345,8 @@ export default function WhatsAppInbox(){
               </div>
             )}
             <div style={{fontSize:12,color:MID_GREY,marginTop:4}}>Keep this link private. Missed WhatsApp calls: a second macro with trigger <b>Notification Received</b> (WhatsApp Business, text contains "Missed") and the same link with <b>[notification_title]</b> at the end and <b>&amp;kind=whatsapp</b>.</div>
+
+            <PhotoManager api={api}/>
 
             <div style={{marginTop:18,fontWeight:700,color:BLUE,fontSize:14}}>Facebook ads</div>
             <div style={{fontSize:12,color:MID_GREY,marginBottom:6}}>Ads clients have come from. Tell the bot what each one shows, and it quotes that for every client from the ad.</div>
@@ -542,6 +548,12 @@ export default function WhatsAppInbox(){
                   </div>
                 );})}
                 {draft.quote&&draft.quote.attach==="price_list"&&<div style={{fontSize:13,color:BLUE,marginBottom:6}}>📎 The price list PDF is sent after the message.</div>}
+                {draft.quote&&Array.isArray(draft.quote.photos)&&draft.quote.photos.map(a=>(
+                  <label key={a} style={{display:"flex",alignItems:"center",gap:6,fontSize:13,color:BLUE,marginBottom:6}}>
+                    <input type="checkbox" checked={photoSel.includes(a)} onChange={e=>setPhotoSel(e.target.checked?[...photoSel,a]:photoSel.filter(x=>x!==a))}/>
+                    📷 Send photos: {a}
+                  </label>
+                ))}
                 {draft.quote&&draft.quote.referral&&(
                   <div style={{fontSize:13,color:BLUE,marginBottom:6}}>
                     📨 Ravin will also get a message: {[draft.quote.referral.client_name||displayName(chat.contact),draft.quote.referral.location,draft.quote.referral.product,draft.quote.referral.area].filter(Boolean).join(" · ")}
@@ -569,7 +581,20 @@ export default function WhatsAppInbox(){
             <button onClick={()=>sendMessage(manualText,null)} disabled={busy||!manualText.trim()} style={btn(BLUE,"#fff")}>Send my message</button>
             {!draft&&<button onClick={redraft} disabled={busy} style={btn("#fff",BLUE,{border:`1px solid ${BLUE}`})}>🤖 Ask the bot for a reply</button>}
             {!hasQuote(draft)&&!quoteOpen&&<button onClick={()=>setQuoteOpen(true)} disabled={busy} style={btn("#fff",BLUE,{border:`1px solid ${BLUE}`})}>📄 Make a quotation</button>}
+            <button onClick={async()=>{ if(albumList){ setAlbumList(null); return; } try{ const r=await api("photos"); setAlbumList(r.albums||[]); }catch(e){ setError(e.message); } }} disabled={busy}
+              style={btn("#fff",BLUE,{border:`1px solid ${BLUE}`})}>📷 Send photos</button>
           </div>
+          {albumList&&(
+            <div style={{border:"1px solid #ddd",borderRadius:8,padding:8,marginTop:6,background:"#fafafa"}}>
+              {!albumList.length&&<div style={{fontSize:13,color:MID_GREY}}>No photos yet. Add them in Setup → Product photos.</div>}
+              {albumList.map(a=>(
+                <button key={a.album} disabled={busy} onClick={async()=>{ const r=await act("send_photos",{wa_id:selected,value:a.album},"✅ Photos sent"); if(r){ setAlbumList(null); await loadChat(selected); loadChats(); } }}
+                  style={{...btn("#fff",BLUE,{border:`1px solid ${BLUE}`,padding:"6px 10px",fontSize:13}),display:"block",width:"100%",textAlign:"left",marginBottom:4}}>
+                  {a.album} · {Math.min(a.count,3)} photo{Math.min(a.count,3)>1?"s":""}
+                </button>
+              ))}
+            </div>
+          )}
           {quoteOpen&&!hasQuote(draft)&&chat&&(
             <QuoteEditor key="manual" quote={null} contact={chat.contact} caption="" draftId={null}
               waId={selected} api={api} onSent={quoteSent} onCancel={()=>setQuoteOpen(false)}/>

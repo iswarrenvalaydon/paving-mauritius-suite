@@ -4,6 +4,7 @@ const { db, getSetting, fmtTime, downloadMedia, REPLY_MARK, quoteSnippet } = req
 const { RULEBOOK } = require("./rulebook");
 const { checkLine } = require("./products");
 const { getAds, latestAd, adPrompt } = require("./ads");
+const { albums: photoAlbums, knownAlbums } = require("./photos");
 
 const MODEL = process.env.BOT_MODEL || "claude-sonnet-5-5";
 const HISTORY_LIMIT = 40;
@@ -96,7 +97,7 @@ Current time in Mauritius: ${now}.
 Client: ${contact?.name || contact?.profile_name || "unknown"} (+${contact?.wa_id || ""}).
 
 Reply with ONLY a JSON object, no other text:
-{"messages": ["<short message>", "<short message>"], "reply_to": [<client message number this message answers, e.g. 3, or null>, ...], "needs_team": true|false, "team_note": "<short note or empty>", "attach": null | "price_list",
+{"messages": ["<short message>", "<short message>"], "reply_to": [<client message number this message answers, e.g. 3, or null>, ...], "needs_team": true|false, "team_note": "<short note or empty>", "attach": null | "price_list", "photos": [<album names to send, or empty>],
  "referral": null | {"client_name": "", "location": "", "product": "", "area": ""},
  "payment": null | {"amount": 25000, "date": "", "bank": "", "reference": ""},
  "quotes": [] | [{"client_name": "", "location": "", "summary": "", "caption": "Here is your quotation.", "items": [{"desc": "Slabs 600x300x60mm – Light Grey", "qty": 0, "area_m2": 20, "gap_cm": 5, "unit_price_incl_vat": 145}]}]}`;
@@ -195,7 +196,7 @@ async function draftReply(waId) {
   const messages = (recent || []).reverse();
   if (!messages.length) return null;
 
-  const [rulebook, examples, ravin, ads] = await Promise.all([getSetting("rulebook", RULEBOOK), getSetting("examples", []), getSetting("ravin_number", ""), getAds()]);
+  const [rulebook, examples, ravin, ads, albumList] = await Promise.all([getSetting("rulebook", RULEBOOK), getSetting("examples", []), getSetting("ravin_number", ""), getAds(), photoAlbums().catch(() => [])]);
   const ad = latestAd(messages);
   const adInfo = ad ? ads[ad.key] : null;
   const adUnknown = Boolean(ad && !(adInfo && adInfo.design));
@@ -203,6 +204,7 @@ async function draftReply(waId) {
   const content = [
     { type: "text", text: `Conversation so far (oldest first):\n${transcript(messages, labels)}` },
     ...(ad ? [{ type: "text", text: adPrompt(ad, adInfo) }] : []),
+    { type: "text", text: photoPrompt(albumList) },
     ...(blocks.length ? [{ type: "text", text: "Attachments from the client:" }, ...blocks] : []),
     { type: "text", text: "Write the JSON for our next message." },
   ];
@@ -249,6 +251,7 @@ async function draftReply(waId) {
     quote,
     quotes,
     attach: parsed.attach === "price_list" ? "price_list" : null,
+    photos: await knownAlbums(parsed.photos).catch(() => []),
     referral: cleanReferral(parsed.referral),
     payment: cleanPayment(parsed.payment),
   };
@@ -269,10 +272,18 @@ function cleanReferral(r) {
   return Object.values(out).some(Boolean) ? out : null; // an empty object means "no referral"
 }
 
+// Tells the bot which photo albums exist, so it can attach them.
+function photoPrompt(list) {
+  if (!list || !list.length) return 'Photo albums: none uploaded yet. If the client asks for photos, say "I\'ll send you some photos." and set needs_team so the team sends them.';
+  return `Photo albums we can send (exact names): ${list.map((a) => `"${a.album}"`).join(", ")}.
+When the client asks for photos or pictures, or wants to see what a product or colour looks like, put the matching album name(s) in "photos" (at most 2) and write one short line such as "Here are some photos of our 600x300 slabs in Light Grey." (in the client's language). The photos go out after your messages. Don't send photos the client didn't ask for. If no album matches, say "I'll send you some photos." and set needs_team.`;
+}
+
 // Builds the row saved in wa_drafts. Extras (quotation, attachment) live in the "quote" column.
 function draftRow(waId, replyTo, draft) {
   const extras = draft.quotes && draft.quotes.length ? { quotes: draft.quotes } : {};
   if (draft.attach) extras.attach = draft.attach;
+  if (draft.photos && draft.photos.length) extras.photos = draft.photos;
   if (draft.referral) extras.referral = draft.referral;
   if (draft.payment) extras.payment = draft.payment;
   return {
@@ -282,7 +293,7 @@ function draftRow(waId, replyTo, draft) {
 }
 
 function hasContent(draft) {
-  return Boolean(draft && (draft.reply || draft.needs_team || draft.quote || draft.attach || draft.referral || draft.payment));
+  return Boolean(draft && (draft.reply || draft.needs_team || draft.quote || draft.attach || (draft.photos && draft.photos.length) || draft.referral || draft.payment));
 }
 
 // Keep only sensible quotation lines; the team can still edit everything before sending.
