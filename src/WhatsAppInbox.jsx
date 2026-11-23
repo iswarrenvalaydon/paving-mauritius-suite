@@ -65,6 +65,7 @@ export default function WhatsAppInbox(){
   const [draftText,setDraftText]=useState("");
   const [photoSel,setPhotoSel]=useState([]); // photo albums the bot suggested, still ticked
   const [albumList,setAlbumList]=useState(null); // for "Send photos" in a chat
+  const [pastRefs,setPastRefs]=useState(null); // clients given Ravin's number without Ravin being told
   const [manualText,setManualText]=useState("");
   const [busy,setBusy]=useState(false);
   const [error,setError]=useState("");
@@ -306,7 +307,18 @@ export default function WhatsAppInbox(){
               </button>
             )}
             <div style={{marginTop:18,fontWeight:700,color:BLUE,fontSize:14}}>Layer referrals (Ravin)</div>
-            <div style={{fontSize:12,color:MID_GREY,marginBottom:6}}>When a client wants a layer, the bot gives Ravin's number and, once you approve, sends Ravin the client's name, number, location, product and area. When the client pays, tap the payment button in their chat to update Ravin.</div>
+            <div style={{fontSize:12,color:MID_GREY,marginBottom:6}}>When a client wants a layer, the bot gives Ravin's number and, once you approve, sends Ravin the client's name, number, location, product and area. If you or Julien give Ravin's number yourselves (from the Suite or the phone), Ravin is told too, once per client. When the client pays, tap the payment button in their chat to update Ravin.</div>
+            <button onClick={async()=>{ const r=await act("past_referrals",{},""); if(r) setPastRefs(r.clients||[]); }} disabled={busy}
+              style={btn("#fff",BLUE,{border:`1px solid ${BLUE}`,padding:"6px 10px",fontSize:12,marginBottom:6})}>🔎 Check past chats for Ravin's number</button>
+            {pastRefs&&!pastRefs.length&&<div style={{fontSize:12,color:MID_GREY,marginBottom:6}}>No client was given Ravin's number without Ravin being told.</div>}
+            {pastRefs&&pastRefs.map(c=>(
+              <div key={c.wa_id} style={{border:"1px solid #eee",borderRadius:8,padding:8,marginBottom:6,fontSize:12}}>
+                <div><b>{c.name||`+${c.wa_id}`}</b> · +{c.wa_id} · {new Date(c.sent_at).toLocaleDateString("en-GB")}</div>
+                <div style={{color:MID_GREY,margin:"2px 0 6px"}}>"{c.text}"</div>
+                <button onClick={async()=>{ const r=await act("refer_ravin",{wa_id:c.wa_id},"✅ Ravin told"); if(r) setPastRefs(pastRefs.filter(x=>x.wa_id!==c.wa_id)); }} disabled={busy}
+                  style={btn(GREEN,"#fff",{padding:"4px 10px",fontSize:12})}>Tell Ravin</button>
+              </div>
+            ))}
             <div style={{display:"flex",gap:8,alignItems:"center",flexWrap:"wrap"}}>
               <input value={ravinInput} onChange={e=>setRavinInput(e.target.value)} placeholder={setup.ravin_number?`+${setup.ravin_number}`:"Ravin's number, e.g. 5xxx xxxx"} inputMode="tel"
                 style={{flex:1,minWidth:160,padding:8,fontSize:14,borderRadius:6,border:"1px solid #ccc"}}/>

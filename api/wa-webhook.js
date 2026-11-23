@@ -4,6 +4,7 @@
 const { db, hookToken, safeEqual, getSetting, logEvent, insertDraft, sendText } = require("./_lib/common");
 const { draftReply, draftRow, hasContent } = require("./_lib/drafter");
 const { adText, noteAd } = require("./_lib/ads");
+const { mentionsRavin, autoRefer } = require("./_lib/referrals");
 
 let waitUntil = null;
 try { ({ waitUntil } = require("@vercel/functions")); } catch { waitUntil = null; }
@@ -119,12 +120,13 @@ async function draftFor(waId, triggerId) {
 
 async function handle(body) {
   const changes = collectChanges(body);
-  if (!changes.length) { await logEvent("unknown", body); return { toDraft: [], resendLater: [] }; }
+  if (!changes.length) { await logEvent("unknown", body); return { toDraft: [], resendLater: [], referLater: [] }; }
 
   const [botEnabled, staffList] = await Promise.all([getSetting("bot_enabled", true), getSetting("staff_numbers", [])]);
   const staff = new Set((Array.isArray(staffList) ? staffList : []).map(digits));
   const toDraft = [];
   const resendLater = [];
+  const referLater = [];
 
   for (const { field, value } of changes) {
     const business = digits(value?.metadata?.display_phone_number);
@@ -177,6 +179,8 @@ async function handle(body) {
           body: bodyOf(m), media_id: mediaIdOf(m), sent_at: isoFromTs(m.timestamp),
         })));
         const ids = echoes.map((m) => digits(m.to));
+        // Ravin's number given from the phone: Ravin is told after the reply to WhatsApp.
+        for (const m of echoes) if (m.type === "text" && await mentionsRavin(m.text?.body)) referLater.push(digits(m.to));
         await refreshLastMessage(ids);
         for (const id of new Set(ids)) {
           await supersedeDrafts(id);
@@ -214,7 +218,7 @@ async function handle(body) {
       await logEvent(field || "other", value);
     }
   }
-  return { toDraft, resendLater };
+  return { toDraft, resendLater, referLater };
 }
 
 // A message from the Suite that WhatsApp dropped for sending too fast: send it again once, 8 s later.
@@ -240,8 +244,9 @@ module.exports = async function handler(req, res) {
 
   let toDraft = [];
   let resendLater = [];
+  let referLater = [];
   try {
-    ({ toDraft, resendLater } = await handle(req.body));
+    ({ toDraft, resendLater, referLater = [] } = await handle(req.body));
   } catch (err) {
     await logEvent("webhook_error", { message: String(err?.message || err), body: req.body });
   }
@@ -249,6 +254,7 @@ module.exports = async function handler(req, res) {
   const jobs = Promise.all([
     ...toDraft.map(([waId, msgId]) => draftFor(waId, msgId)),
     ...resendLater.map((id) => resendFailed(id)),
+    ...[...new Set(referLater)].map((id) => autoRefer(id, "phone").catch(() => null)),
   ]);
   if (waitUntil) {
     waitUntil(jobs);

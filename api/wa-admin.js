@@ -4,6 +4,7 @@ const { splitReply, replyTarget, db, hookToken, missedCallToken, safeEqual, d360
 const { draftReply, draftRow } = require("./_lib/drafter");
 const { latestAd, getAds, describeAd, deleteAd } = require("./_lib/ads");
 const { albums, addPhoto, deletePhoto, getPhotos, albumPhotos, knownAlbums } = require("./_lib/photos");
+const { TEMPLATES, tplText, prettyNumber, storeOut, sendLayerTemplate, getReferral, notifyRavin, mentionsRavin, autoRefer, pastRavinMentions } = require("./_lib/referrals");
 
 const digits = (s) => String(s || "").replace(/\D/g, "");
 const sleep = (ms) => new Promise((r) => setTimeout(r, ms));
@@ -62,11 +63,6 @@ function priceListUrl() {
   return `https://${host}/price-list.pdf`;
 }
 
-async function storeOut(waId, id, type, text) {
-  await db().from("wa_messages").upsert({
-    id, wa_id: waId, direction: "out", source: "suite", type, body: text, status: "sent", sent_at: new Date().toISOString(),
-  }, { onConflict: "id", ignoreDuplicates: true });
-}
 
 // When the team changes a suggestion before sending, keep the before/after so the bot learns from it.
 async function learnFrom(waId, rawDraft, rawSent) {
@@ -84,23 +80,6 @@ async function learnFrom(waId, rawDraft, rawSent) {
 
 // ---- Layer referral template (Ravin) ----
 // Two templates: the referral itself, then a payment update when the client pays.
-const TEMPLATES = {
-  referral: {
-    name: "layer_referral",
-    body: "Hello bro, Paving Mauritius has just referred a client to you for laying.\nClient: {{1}}\nNumber: {{2}}\nLocation: {{3}}\nProduct: {{4}}\nArea: {{5}}\nThank you!",
-    example: ["Jean Dupont", "+230 5762 9412", "Curepipe", "Pavers 200x100x60mm, Light Grey", "20 m2"],
-  },
-  payment: {
-    name: "layer_payment_update",
-    body: "Hello bro, payment update for the client we referred to you.\nClient: {{1}}\nNumber: {{2}}\nPayment: {{3}}\nArea given to us: {{4}}\nIf the area on site is different, please let us know before delivery. Thank you!",
-    example: ["Jean Dupont", "+230 5762 9412", "Paid in full", "20 m2"],
-  },
-  missed: {
-    name: "missed_call",
-    body: "Hello, this is Paving Mauritius Ltd. Sorry we missed your call! How can we help you? You can reply here on WhatsApp.",
-    example: null,
-  },
-};
 const PAYMENT_STATUSES = ["Deposit paid", "Half paid", "Fully paid"];
 
 async function templateStatuses() {
@@ -131,42 +110,9 @@ async function createMissingTemplates() {
   return created;
 }
 
-const tplText = (t) => String(t || "").replace(/\s+/g, " ").trim().slice(0, 120) || "not given";
-function prettyNumber(waId) {
-  if (!waId.startsWith("230")) return `+${waId}`;
-  const local = waId.slice(3);
-  return `+230 ${local.slice(0, 4)} ${local.slice(4)}`.trim();
-}
 
-async function sendLayerTemplate(key, params) {
-  const ravin = String(await getSetting("ravin_number", "") || "").replace(/\D/g, "");
-  if (!ravin) throw new Error("Ravin's number isn't saved in Setup");
-  const t = TEMPLATES[key];
-  const data = await d360("/messages", {
-    method: "POST",
-    body: {
-      messaging_product: "whatsapp", recipient_type: "individual", to: ravin, type: "template",
-      template: { name: t.name, language: { code: "en" }, components: [{ type: "body", parameters: params.map((text) => ({ type: "text", text })) }] },
-    },
-  });
-  const id = data?.messages?.[0]?.id || `local-${Date.now()}`;
-  await db().from("wa_contacts").upsert({ wa_id: ravin, name: "Ravin (layer)", is_staff: true }, { onConflict: "wa_id" });
-  await storeOut(ravin, id, "template", t.body.replace(/\{\{(\d)\}\}/g, (_, n) => params[Number(n) - 1]));
-  return id;
-}
 
-// Keeps a record of each referral (for the payment update and Ravin's commission).
-async function saveReferral(waId, referral) {
-  const list = await getSetting("referrals", []);
-  const rows = (Array.isArray(list) ? list : []).filter((r) => r.wa_id !== waId);
-  rows.push({ wa_id: waId, ...referral, referred_at: new Date().toISOString(), payments: [] });
-  await setSetting("referrals", rows.slice(-300));
-}
 
-async function getReferral(waId) {
-  const list = await getSetting("referrals", []);
-  return (Array.isArray(list) ? list : []).find((r) => r.wa_id === waId) || null;
-}
 
 // ---- Quotation totals and confirmed payments, per client ----
 async function getMap(key) { const m = await getSetting(key, {}); return m && typeof m === "object" && !Array.isArray(m) ? m : {}; }
@@ -226,11 +172,6 @@ async function sendPaymentUpdate(waId, status) {
   return ref;
 }
 
-// Tells Ravin about a client we referred (no payment info yet; that comes later as an update).
-async function notifyRavin(waId, referral) {
-  await sendLayerTemplate("referral", [tplText(referral.client_name), prettyNumber(waId), tplText(referral.location), tplText(referral.product), tplText(referral.area)]);
-  await saveReferral(waId, referral);
-}
 
 // Sends one suggestion: its short messages in order, then the price list if attached.
 // Sends the photos of one or more albums (a few each), spaced out for WhatsApp's per-person limit.
@@ -324,6 +265,10 @@ async function send(waId, body, draftId, photosWanted) {
     if (draft?.quote?.referral) {
       try { await notifyRavin(waId, draft.quote.referral); referralSent = true; }
       catch (e) { warning = `The client got Ravin's number, but Ravin couldn't be told: ${String(e.message || e)}`; await logEvent("referral_failed", { wa_id: waId, message: String(e.message || e) }); }
+    } else if (await mentionsRavin(parts.join("\n"))) {
+      // The team typed Ravin's number themselves: Ravin still has to hear about the client.
+      try { referralSent = Boolean(await autoRefer(waId, "suite")); }
+      catch (e) { warning = `The client got Ravin's number, but Ravin couldn't be told: ${String(e.message || e)}`; }
     }
     const now = new Date().toISOString();
     const sentText = parts.join("\n---\n");
@@ -476,6 +421,11 @@ module.exports = async function handler(req, res) {
         const ids = await sendAlbums(waId, names, false);
         await db().from("wa_contacts").update({ last_message_at: new Date().toISOString(), unread: 0 }).eq("wa_id", waId);
         return res.json({ ok: true, ids });
+      }
+      case "past_referrals": return res.json({ clients: await pastRavinMentions() });
+      case "refer_ravin": {
+        const referral = await autoRefer(waId, "check");
+        return res.json({ ok: true, referral, already: !referral });
       }
       case "referral_payment": return res.json({ ok: true, referral: await sendPaymentUpdate(waId, value) });
       case "send_pdf": {
