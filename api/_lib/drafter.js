@@ -49,6 +49,7 @@ ${rulebook}
 
 How to write:
 - "[Message not passed on by WhatsApp…]" (or "[unsupported]") means WhatsApp didn't give us the client's words; the message is only visible on the business phone. When it is the client's FIRST message, it is almost always the automatic message from tapping one of our Facebook ads: reply as to an ad enquiry, without naming a product or design: message 1 = "Hello, thank you for contacting Paving Mauritius Ltd."; message 2 = "Do you know your measurements? I can give you a quotation.". Otherwise reply naturally to what you can see. Never mention voice notes, stickers or files you can't read. Set needs_team and say in team_note: "WhatsApp didn't pass this message to the Suite: check it on the business phone."
+- Company documents (BRN certificate, business registration, VAT certificate, letterhead, company card): read them and put ALL the details on every quotation for this client: "client_name" = the registered company name exactly as written, "location" = the registered/business address, "city" = the town, "brn" = the BRN (e.g. C12345678), "vat_no" = the VAT registration number if shown, "email" if shown. Use them for later quotations in the same chat too. Never leave the BRN or address out once the client has sent them.
 - FIRST, read EVERY client message since our last reply (there are often several, sent seconds apart) and answer each question or request in this reply. Never answer only the first one. If there are more things to answer than fit in 3 messages, combine them.
 - Client messages are numbered (#1, #2…). When the client sent several messages about different things since our last reply, answer each in its own message and put the number of the client message it answers in "reply_to" (same position as the message), so WhatsApp shows our answer quoting it. Use null for a message that answers nothing in particular (e.g. a thank-you), and leave "reply_to" empty when the client sent only one message.
 - Write like a busy, friendly salesperson on WhatsApp: SHORT separate messages, not one block. Return 1 to 3 messages in "messages"; each one is normally a single sentence or two, under about 200 characters. One question per message, and the question goes last.
@@ -100,7 +101,7 @@ Reply with ONLY a JSON object, no other text:
 {"messages": ["<short message>", "<short message>"], "reply_to": [<client message number this message answers, e.g. 3, or null>, ...], "needs_team": true|false, "team_note": "<short note or empty>", "attach": null | "price_list", "photos": [<album names to send, or empty>],
  "referral": null | {"client_name": "", "location": "", "product": "", "area": ""},
  "payment": null | {"amount": 25000, "date": "", "bank": "", "reference": ""},
- "quotes": [] | [{"client_name": "", "location": "", "summary": "", "caption": "Here is your quotation.", "items": [{"desc": "Slabs 600x300x60mm – Light Grey", "qty": 0, "area_m2": 20, "gap_cm": 5, "unit_price_incl_vat": 145}]}]}`;
+ "quotes": [] | [{"client_name": "", "location": "<street address>", "city": "", "brn": "", "vat_no": "", "email": "", "summary": "", "caption": "Here is your quotation.", "items": [{"desc": "Slabs 600x300x60mm – Light Grey", "qty": 0, "area_m2": 20, "gap_cm": 5, "unit_price_incl_vat": 145}]}]}`;
 }
 
 function transcript(messages, labels) {
@@ -315,6 +316,10 @@ function cleanQuote(q) {
   return {
     client_name: String(q.client_name || "").slice(0, 120).trim(),
     location: String(q.location || "").slice(0, 200).trim(),
+    city: String(q.city || "").slice(0, 80).trim(),
+    brn: String(q.brn || "").replace(/^\s*BRN[:\s]*/i, "").slice(0, 30).trim(),
+    vat_no: String(q.vat_no || "").replace(/^\s*VAT[^:\d]*[:\s]*/i, "").slice(0, 30).trim(),
+    email: String(q.email || "").slice(0, 120).trim(),
     summary: String(q.summary || "").slice(0, 300).trim(),
     caption: String(q.caption || "").slice(0, 900).trim(),
     items,

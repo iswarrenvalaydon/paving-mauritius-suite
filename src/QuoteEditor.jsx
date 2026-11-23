@@ -26,6 +26,11 @@ function toBase64(buf){
 export default function QuoteEditor({quote,contact,caption,followup,showFollowup=true,draftId,waId,api,onSent,onCancel,quoteIndex=0,sentRef="",label=""}){
   const [name,setName]=useState((quote&&quote.client_name)||(contact&&(contact.name||contact.profile_name))||"");
   const [location,setLocation]=useState((quote&&quote.location)||"");
+  const [city,setCity]=useState((quote&&quote.city)||"");
+  const [brn,setBrn]=useState((quote&&quote.brn)||"");
+  const [vatNo,setVatNo]=useState((quote&&quote.vat_no)||"");
+  const [email,setEmail]=useState((quote&&quote.email)||"");
+  const [moreOpen,setMoreOpen]=useState(Boolean(quote&&(quote.brn||quote.vat_no||quote.city||quote.email)));
   const [lines,setLines]=useState(()=>(quote&&quote.items&&quote.items.length)
     ?quote.items.map(i=>({desc:i.desc,qty:String(i.qty),price:String(i.unit_price_incl_vat||"")}))
     :[{desc:"",qty:"",price:""}]);
@@ -45,7 +50,16 @@ export default function QuoteEditor({quote,contact,caption,followup,showFollowup
   const subtotal=calc.reduce((s,l)=>s+l.total,0);
   const vat=subtotal*VAT_RATE;
   const total=subtotal+vat;
-  const client={name:name.trim(),address:location.trim(),city:"",area:"",brn:"",vat:"",contact:`+${waId}`,email:""};
+  const tagged=(prefix,v)=>{ const t=v.trim(); return !t?"":new RegExp(`^${prefix}`,"i").test(t)?t:`${prefix}: ${t}`; };
+  const client={name:name.trim(),address:location.trim(),city:city.trim(),area:"",brn:tagged("BRN",brn),vat:tagged("VAT",vatNo),contact:`+${waId}`,email:email.trim()};
+  // Company clients (with a BRN or address) go into the shared client list used by the Documents tab.
+  async function saveClient(){
+    if(!client.name||!(brn.trim()||location.trim())) return;
+    try{
+      await supabase.from("clients").upsert({name:client.name,contact:client.contact,address:client.address,city:client.city,area:"",
+        brn:brn.trim(),vat:vatNo.trim(),email:client.email,updated_at:new Date().toISOString()},{onConflict:"name"});
+    }catch{ /* the quotation matters more than the client list */ }
+  }
   const ready=Boolean(calc.length&&name.trim()&&bank);
 
   // Any edit after saving means a new quotation, so it will get a new number.
@@ -86,6 +100,7 @@ export default function QuoteEditor({quote,contact,caption,followup,showFollowup
         items:calc,include_bank:bank==="sbm",total,
       });
     }catch{ /* the PDF exists; only the record failed */ }
+    await saveClient();
   }
 
   async function approve(){
@@ -135,7 +150,14 @@ export default function QuoteEditor({quote,contact,caption,followup,showFollowup
 
       <div style={{display:"grid",gap:6,marginBottom:10}}>
         <input value={name} onChange={e=>{ setName(e.target.value); changed(); }} placeholder="Client name (on the quotation)" style={field}/>
-        <input value={location} onChange={e=>{ setLocation(e.target.value); changed(); }} placeholder="Address / town (optional)" style={field}/>
+        <input value={location} onChange={e=>{ setLocation(e.target.value); changed(); }} placeholder="Address (optional)" style={field}/>
+        {!moreOpen&&<button type="button" onClick={()=>setMoreOpen(true)} style={{background:"none",border:"none",color:BLUE,padding:"2px 0",fontSize:12,textDecoration:"underline",cursor:"pointer"}}>+ Company details (town, BRN, VAT, email)</button>}
+        {moreOpen&&<>
+          <input value={city} onChange={e=>{ setCity(e.target.value); changed(); }} placeholder="Town" style={field}/>
+          <input value={brn} onChange={e=>{ setBrn(e.target.value); changed(); }} placeholder="BRN (e.g. C12345678)" style={field}/>
+          <input value={vatNo} onChange={e=>{ setVatNo(e.target.value); changed(); }} placeholder="VAT number" style={field}/>
+          <input value={email} onChange={e=>{ setEmail(e.target.value); changed(); }} placeholder="Email" style={field}/>
+        </>}
       </div>
 
       {lines.map((l,i)=>{
