@@ -3,7 +3,7 @@
 const { db, getSetting, fmtTime, downloadMedia, REPLY_MARK, quoteSnippet } = require("./common");
 const { RULEBOOK } = require("./rulebook");
 const { checkLine } = require("./products");
-const { getAds, latestAd, adPrompt } = require("./ads");
+const { getAds, adPrompt, pickedAds, resolveAd, needsAdPick } = require("./ads");
 const { albums: photoAlbums, knownAlbums, getPhotos } = require("./photos");
 
 const MODEL = process.env.BOT_MODEL || "claude-sonnet-5-5";
@@ -63,7 +63,9 @@ How to write:
 - Don't list all colours, sizes or prices unless the client asks. Mention only the product the client (or the ad) is about. Never suggest mixing colours or designs unless the client asks.
 - Never promise to come back "in a few minutes", "shortly" or at a set time. If something needs the team, set needs_team and explain in team_note; to the client, answer what you can or ask the next useful question. (Only exceptions: the rulebook's phrases "we'll confirm the final delivery price" and, for delay updates, "I'm checking with the team and will confirm today".)
 - If the client's last messages need nothing more (for example "ok merci"), return no messages.
-- Set needs_team whenever the rulebook says to hand over or check with the team, or when you are unsure. Explain why in team_note (English, one or two short lines, for the team only).
+- needs_team means a person must approve this suggestion before it goes out. Set it whenever the rulebook says to hand over, check with the team or hold for the team (sketches, complicated photos, unclear measurements, several areas mixed, unclear product or colour, large orders, contractors, discounts, payments, complaints), or when you are unsure. Don't set it for simple answers (greetings, hours, location, price list, photos) or simple quotations where the product, colour and area are clear.
+- Discounts: when the client asks for a discount or a better price, write NO message about it (don't offer, refuse or promise anything); set needs_team and say in team_note what they asked. Answer any other question they asked as usual.
+- Client says they already bought or already have the product: first confirm with one short question; if they confirm, one polite closing line and nothing more. Client says they are busy and will contact us later: one short friendly closing line, no new question. Explain why in team_note (English, one or two short lines, for the team only).
 - Never invent prices, dates, stock or facts that are not in the rulebook or the conversation.
 - Messages marked [team] were sent by our staff; treat them as our own and stay consistent with them.
 
@@ -71,7 +73,7 @@ The usual conversation:
 1. Facebook ad: a message starting with [From Facebook ad: ...] or [From Facebook post: ...] means the client tapped our ad (the text in quotes is the ad; "Hello! Can I get more info on this?" is Facebook's automatic text). First reply, as two short messages: thank them for their interest in the advertised product (name only that product), then "Do you know your measurements? I can give you a quotation." No price list, no colour list, no other sizes. If the ad text is missing, ask briefly whether they want pavers or slabs, then the measurements question. "Hello! Can I get more info on this?" is only Facebook's automatic text: the client's NEXT messages are what they really want, so always answer those directly, never with the standard ad reply alone. Short words right after the ad come from the ad's question buttons: "Location" = where are we (give the factory location with the Google Maps link on its own line, plus the factory hours); "Price" = the price of the ad's product; "Delivery" = do we deliver (answer from the rulebook's Delivery section); "Contact" = our number; answer them, e.g. message 1 = thank-you + the answer, message 2 = "Do you know your measurements? I can give you a quotation." If they send measurements or an area (e.g. "18 ft by 45 ft", "50 m2"), they want an estimate for the ad's product: message 1 = a short thank-you and the area with the pieces and the estimated total, VAT included, for the ad's product (or design); message 2 = "Would you like a formal quotation?". Don't ask "Do you know your measurements?" when they have already sent them, and don't ask which slab, size or colour. If they name a size (e.g. "600x300"), that is the product they want: give the estimate if you have the area, otherwise ask for the measurements. Once the client has come from an ad, the advertised product IS the product they want: when they then send measurements (or a sketch), go straight to the estimate or quotation for that product. Never ask again which product, slab or paver they want, unless they say they want something else. If the ad shows a design (e.g. the two-colour design: 600x300 Light Grey + 300x300 Dark Grey), that whole design, with its sizes and colours, is what they want: never ask which colour or size, and never treat the design as two separate options. When they send measurements, the first message is the area and the pieces of each part of the design with the estimated total, VAT included (work the pieces out with the rulebook's design rule, no gap unless the client asks for one); the second message is "Would you like a formal quotation?". The quotation for a design is ONE quotation with one line per part (e.g. 600x300 Light Grey and 300x300 Dark Grey), each with its qty worked out by you and area_m2, area_sqft and gap_cm left at 0 (otherwise each line would be counted for the whole area). If the ad shows separate options (e.g. different sizes to choose from), use the one they name; only if they named none, quote the main one shown in the ad.
 2. Measurements or a sketch: first message = the area you read (ask them to confirm if it came from a sketch) and the number of pieces. If the colour isn't known yet (and the client didn't come from an ad that shows it), the second message is just "Which colour would you like?" (don't list colours or prices; let them ask).
 3. Once product, size, colour and area are known: first message = number of pieces and the estimated total, VAT included. Second message = "Would you like a formal quotation?"
-Large orders (over about 150 m²) and contractors: as soon as you know the area is over about 150 m² (or they're a contractor), add a separate message saying our director will contact them personally (wording in the rulebook, section 10), and set needs_team with the area in team_note. Say it once per client.
+Large orders (over about 150 m²) and contractors: as soon as you know the area is over about 150 m² (or they're a contractor), add a separate message saying our Sales Manager will contact them personally (wording in the rulebook, section 10), and set needs_team with the area in team_note. Say it once per client.
 4. Only when the client says yes, or asks for a quotation themselves, prepare "quotes" (see below). If they ask for a quotation directly, don't ask "would you like a quotation?" again: prepare it straight away if you have product, size, colour and area, otherwise ask only for what's missing.
 
 Attachments from the client (photos and PDFs) come after the conversation, labelled to match it (for example [Photo 1]):
@@ -79,7 +81,7 @@ Attachments from the client (photos and PDFs) come after the conversation, label
 - Site photos: use them to understand the job, but never estimate an area from a photo alone; ask for measurements.
 - Product photos (a picture of a paver, slab or kerb, e.g. a screenshot or a photo of one laid somewhere): if you recognise it as one of OUR products, that is the product the client wants, even if they came from an ad for something else. Never ask the client "do you mean…?". Write it confidently, as up to three messages: 1) thank them for their interest; 2) "Yes, this is our <product with full size, e.g. Evergreen 400x400x120mm>, and we manufacture it."; 3) the quotation question using exactly what they asked for, e.g. "Would you like a formal quotation for 1,000 pieces?" (or for their m² or measurements; if they gave no quantity: "How many do you need, or what are your measurements?"). Never promise stock or a delivery date. Set needs_team and say in team_note which product you recognised, so the team confirms before sending.
 - If you can't tell which product is in the photo, or it isn't one we make, don't guess and don't name a product to the client: set needs_team and ask the team in team_note what it is; the client message is only a short thank-you.
-- Payment proofs: fill "payment" with the amount in rupees (a number), date, bank and reference, mention them in team_note, and set needs_team. Never tell the client the payment is confirmed; just thank them and say the team will check it.
+- Payment proofs: fill "payment" with the amount in rupees (a number), date, bank and reference, mention them in team_note, and set needs_team. Never tell the client the payment is confirmed; just thank them, e.g. "Thank you for sending your payment confirmation.", and say nothing more (never "the team will check it").
 - If an attachment could not be loaded, say so in team_note.
 
 Quotations ("quotes", a list):
@@ -197,8 +199,15 @@ async function draftReply(waId) {
   const messages = (recent || []).reverse();
   if (!messages.length) return null;
 
-  const [rulebook, examples, ravin, ads, albumList] = await Promise.all([getSetting("rulebook", RULEBOOK), getSetting("examples", []), getSetting("ravin_number", ""), getAds(), photoAlbums().catch(() => [])]);
-  const ad = latestAd(messages);
+  const [rulebook, examples, ravin, ads, albumList, picks] = await Promise.all([getSetting("rulebook", RULEBOOK), getSetting("examples", []), getSetting("ravin_number", ""), getAds(), photoAlbums().catch(() => []), pickedAds()]);
+  if (needsAdPick(messages, picks[waId], ads)) {
+    // Nothing goes to the client until the team says which ad it was.
+    return {
+      reply: "", needs_team: true, quote: null, quotes: [], attach: null, photos: [], photo_mode: "album", photos_after: "", referral: null, payment: null, ask_ad: true,
+      team_note: "📢 Which ad did this client come from? WhatsApp didn't pass the first message on. Check it on the business phone, then tap the ad below and the bot writes the reply.",
+    };
+  }
+  const ad = resolveAd(messages, picks[waId], ads);
   const adInfo = ad ? ads[ad.key] : null;
   const adUnknown = Boolean(ad && !(adInfo && adInfo.design));
   const { labels, blocks } = await mediaBlocks(messages);
@@ -327,6 +336,7 @@ function draftRow(waId, replyTo, draft) {
   }
   if (draft.referral) extras.referral = draft.referral;
   if (draft.payment) extras.payment = draft.payment;
+  if (draft.ask_ad) extras.ask_ad = true;
   return {
     wa_id: waId, reply_to: replyTo || null, body: draft.reply || "", needs_team: draft.needs_team,
     team_note: draft.team_note || null, ...(Object.keys(extras).length ? { quote: extras } : {}),
@@ -334,7 +344,7 @@ function draftRow(waId, replyTo, draft) {
 }
 
 function hasContent(draft) {
-  return Boolean(draft && (draft.reply || draft.needs_team || draft.quote || draft.attach || (draft.photos && draft.photos.length) || draft.referral || draft.payment));
+  return Boolean(draft && (draft.reply || draft.needs_team || draft.ask_ad || draft.quote || draft.attach || (draft.photos && draft.photos.length) || draft.referral || draft.payment));
 }
 
 // Keep only sensible quotation lines; the team can still edit everything before sending.

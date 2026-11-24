@@ -193,6 +193,11 @@ export default function WhatsAppInbox(){
     if(r){ setAdInput(""); setAdEdit(false); draftIdRef.current=null; await loadChat(selected); loadChats(); }
   }
 
+  async function pickAd(key){
+    const r=await act("pick_ad",{wa_id:selected,value:key},"Noted, new suggestion written");
+    if(r){ draftIdRef.current=null; setDraftText(""); await loadChat(selected); loadChats(); }
+  }
+
   async function redraft(){
     const r=await act("redraft",{wa_id:selected},"New suggestion written");
     if(r) await loadChat(selected);
@@ -302,6 +307,33 @@ export default function WhatsAppInbox(){
                   )}
                   {[t.referral,t.payment,t.missed].some(x=>String(x||"").startsWith("pending"))&&<div style={{fontSize:12,color:MID_GREY,marginTop:4}}>WhatsApp is reviewing them, usually within minutes, sometimes up to a day.</div>}
                 </>
+              );
+            })()}
+
+            <div style={{marginTop:18,fontWeight:700,color:BLUE,fontSize:14}}>Automatic sending</div>
+            {(()=>{
+              const a=setup.auto_send||{enabled:false,bank:"none"};
+              const save=async(patch,msg)=>{ const r=await act("auto_send",patch,msg); if(r) openSetup(); };
+              return(
+                <div style={{border:`2px solid ${a.enabled?GREEN:"#ccc"}`,borderRadius:8,padding:10,fontSize:12}}>
+                  <div style={{fontSize:14,fontWeight:700,color:a.enabled?GREEN:MID_GREY,marginBottom:4}}>{a.enabled?"🟢 ON: simple replies go out by themselves":"⚪ OFF: every suggestion waits for your approval"}</div>
+                  <div style={{color:MID_GREY,marginBottom:6}}>
+                    When on, the bot sends greetings, factory hours and location, the price list, photos and simple quotations by itself.
+                    It still waits for you on: sketches, photos, files and voice notes from the client; unclear measurements, several areas, unclear product or colour;
+                    large orders and contractors; discounts; payments; "which ad?"; anything it isn't sure about; clients the team answered from the phone in the last 2 hours; and at night (11 p.m. to 7 a.m.).
+                    Everything it sends shows in the chat, and in the review file as "SENT AUTOMATICALLY".
+                  </div>
+                  <div style={{display:"flex",gap:8,alignItems:"center",flexWrap:"wrap"}}>
+                    <button onClick={()=>{ if(a.enabled||window.confirm("Switch on automatic sending? Simple replies and quotations will go to clients without your approval.")) save({enabled:!a.enabled},a.enabled?"Automatic sending switched off":"Automatic sending switched on"); }} disabled={busy}
+                      style={btn(a.enabled?"#fff":GREEN,a.enabled?"#B00020":"#fff",a.enabled?{border:"1px solid #B00020",padding:"6px 12px",fontSize:13}:{padding:"6px 12px",fontSize:13})}>{a.enabled?"Switch off":"Switch on"}</button>
+                    <label>Bank details on automatic quotations:{" "}
+                      <select value={a.bank} onChange={e=>save({bank:e.target.value},"Saved")} disabled={busy} style={{fontSize:12,padding:4}}>
+                        <option value="none">None</option>
+                        <option value="sbm">SBM</option>
+                      </select>
+                    </label>
+                  </div>
+                </div>
               );
             })()}
 
@@ -487,6 +519,16 @@ export default function WhatsAppInbox(){
               {draft.needs_team?"⚠️ Bot suggestion – needs your decision":"🤖 Bot suggestion – check and send"}
             </div>
             {draft.team_note&&<div style={{fontSize:13,color:"#333",marginBottom:8}}><b>Note for the team:</b> {draft.team_note}</div>}
+            {draft.quote&&draft.quote.ask_ad&&(
+              <div style={{display:"grid",gap:6,marginBottom:8}}>
+                {(chat.ad_choices||[]).map(a=>(
+                  <button key={a.key} onClick={()=>pickAd(a.key)} disabled={busy} style={btn("#fff",BLUE,{border:`1px solid ${BLUE}`,textAlign:"left",fontSize:13})}>
+                    📢 {a.design}<div style={{fontWeight:400,fontSize:12,color:MID_GREY,marginTop:2}}>{String(a.label||"").slice(0,90)}</div>
+                  </button>
+                ))}
+                <button onClick={()=>pickAd("none")} disabled={busy} style={btn("#fff",MID_GREY,{border:"1px solid #ccc",fontSize:13})}>Not from an ad</button>
+              </div>
+            )}
             {hasQuote(draft)?(
               <>
                 {(()=>{

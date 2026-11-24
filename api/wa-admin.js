@@ -2,7 +2,8 @@
 // (wa_settings.team_emails). The browser never sees the WhatsApp, Claude or Supabase secret keys.
 const { splitReply, replyTarget, db, hookToken, missedCallToken, safeEqual, d360, sendText, downloadMedia, uploadMedia, sendDocument, insertDraft, getSetting, setSetting, logEvent } = require("./_lib/common");
 const { draftReply, draftRow } = require("./_lib/drafter");
-const { latestAd, getAds, describeAd, deleteAd } = require("./_lib/ads");
+const { autoSettings } = require("./_lib/autosend");
+const { getAds, describeAd, deleteAd, pickedAds, pickAd, resolveAd } = require("./_lib/ads");
 const { albums, addPhoto, deletePhoto, getPhotos, albumPhotos, knownAlbums } = require("./_lib/photos");
 const { TEMPLATES, tplText, prettyNumber, storeOut, sendLayerTemplate, getReferral, notifyRavin, mentionsRavin, autoRefer, pastRavinMentions } = require("./_lib/referrals");
 
@@ -46,13 +47,17 @@ async function getChat(waId) {
   ]);
   await db().from("wa_contacts").update({ unread: 0 }).eq("wa_id", waId);
   const list = (messages || []).reverse();
-  const ad = latestAd(list);
-  const ads = ad ? await getAds() : {};
+  const [ads, picks] = await Promise.all([getAds(), pickedAds()]);
+  const ad = resolveAd(list, picks[waId], ads);
   const design = ad ? ads[ad.key]?.design || "" : "";
   let draft = drafts?.[0] || null;
+  // "Which ad?" buttons: the ads the team has described, newest first.
+  const adChoices = draft?.quote?.ask_ad
+    ? Object.entries(ads).filter(([, a]) => a && a.design).sort((a, b) => String(b[1].first_seen || "").localeCompare(String(a[1].first_seen || ""))).slice(0, 8).map(([key, a]) => ({ key, label: a.label, design: a.design }))
+    : [];
   // The "new ad" warning is out of date once the team has described the ad.
   if (draft && design && draft.team_note) draft = { ...draft, team_note: draft.team_note.replace(/📢 New ad: tell the bot what's in it \(box above\), then it can quote\.\s*/, "").trim() || null };
-  return { contact, messages: list, draft, referral: await getReferral(waId), money: await paymentSummary(waId), ad: ad ? { ...ad, design } : null };
+  return { contact, messages: list, draft, referral: await getReferral(waId), money: await paymentSummary(waId), ad: ad ? { ...ad, design } : null, ad_choices: adChoices };
 }
 
 const LATE = "This client last wrote more than 24 hours ago, so WhatsApp won't let us send a normal message. Reply from the phone instead, or wait for the client to write again.";
@@ -290,6 +295,38 @@ async function send(waId, body, draftId, photosWanted) {
   }
 }
 
+// An automatic quotation: same PDF, number counter and records as approving one in the Suite.
+function todayMU() { return new Date().toLocaleDateString("en-CA", { timeZone: "Indian/Mauritius" }); }
+async function autoQuote(waId, draftId, q, index, bank, followup) {
+  const { buildDocPdf, docPrefix } = await import("./_lib/docpdf.mjs");
+  const { data: contact } = await db().from("wa_contacts").select("name,profile_name").eq("wa_id", waId).maybeSingle();
+  const calc = (q.items || []).map((i) => {
+    const qty = Number(i.qty) || 0;
+    const unitPrice = (Number(i.unit_price_incl_vat) || 0) / 1.15;
+    return { desc: String(i.desc || "").trim(), qty, unitPrice, total: qty * unitPrice, code: "" };
+  }).filter((l) => l.desc && l.qty > 0 && l.unitPrice > 0);
+  if (!calc.length) throw new Error("The quotation has no lines with a price");
+  const subtotal = calc.reduce((s, l) => s + l.total, 0);
+  const vat = subtotal * 0.15;
+  const total = subtotal + vat;
+  const tagged = (prefix, v) => { const t = String(v || "").trim(); return !t ? "" : new RegExp(`^${prefix}`, "i").test(t) ? t : `${prefix}: ${t}`; };
+  const name = q.client_name || contact?.name || contact?.profile_name || "Client";
+  const client = { name, address: q.location || "", city: q.city || "", area: "", brn: tagged("BRN", q.brn), vat: tagged("VAT", q.vat_no), contact: `+${waId}`, email: q.email || "" };
+  const { data: num, error } = await db().rpc("get_next_ref", { p_doc_type: "Quotation" });
+  if (error || num === null || num === undefined) throw new Error("Could not get the next quotation number");
+  const ref = `${docPrefix("Quotation")}/${String(num).padStart(3, "0")}`;
+  const date = todayMU();
+  const doc = await buildDocPdf({ docType: "Quotation", docRef: ref, date, client, toName: name, calcItems: calc, subtotal, vat, total, includeBank: bank === "sbm" });
+  const data = Buffer.from(doc.output("arraybuffer")).toString("base64");
+  const r = await sendPdf(waId, { filename: `${ref.replace(/\//g, "_")}.pdf`, data, caption: q.caption || "Here is your quotation.", draftId, followup, quoteIndex: index, ref });
+  try {
+    await db().from("documents").insert({ doc_type: "Quotation", ref, doc_date: date, client_name: name, client_snapshot: client, items: calc, include_bank: bank === "sbm", total });
+    if (q.brn || q.location) await db().from("clients").upsert({ name, contact: client.contact, address: client.address, city: client.city, area: "", brn: String(q.brn || ""), vat: String(q.vat_no || ""), email: client.email, updated_at: new Date().toISOString() }, { onConflict: "name" });
+  } catch { /* the quotation went out; only the records failed */ }
+  await recordQuote(waId, ref, total);
+  return { ...r, ref };
+}
+
 async function redraft(waId) {
   const draft = await draftReply(waId);
   if (!draft) throw new Error("No messages in this chat yet");
@@ -384,6 +421,7 @@ async function status(req) {
     out.examples = await getSetting("examples", []);
     out.ads = Object.entries(await getAds()).map(([key, a]) => ({ key, ...a })).sort((a, b) => String(b.first_seen || "").localeCompare(String(a.first_seen || "")));
     out.ravin_number = await getSetting("ravin_number", "");
+    out.auto_send = await autoSettings();
     out.missed_call_url = `${siteUrl(req)}/api/missed-call?token=${missedCallToken()}&number=`;
     out.tables = true;
   } catch (err) { out.tables = false; out.table_error = String(err.message || err); }
@@ -476,7 +514,7 @@ async function reviewExport(days) {
     if (!chats.has(d.wa_id)) continue;
     const original = d.quote?.original || (d.status === "sent" ? "" : d.body);
     const changed = d.status === "sent" && d.quote?.original && d.quote.original.trim() !== String(d.body || "").trim();
-    const fate = d.status === "sent" ? (d.quote?.original ? (changed ? "SENT AFTER CHANGES" : "SENT AS WRITTEN") : "SENT") : d.status.toUpperCase();
+    const fate = d.status === "sent" ? (d.quote?.auto ? "SENT AUTOMATICALLY" : d.quote?.original ? (changed ? "SENT AFTER CHANGES" : "SENT AS WRITTEN") : "SENT") : d.status.toUpperCase();
     const lines = [`[${t(d.created_at)}] BOT SUGGESTION → ${fate}${d.needs_team ? " (flagged for the team)" : ""}`];
     if (original) lines.push(`    bot wrote: ${original.replace(/\n---\n/g, " | ")}`);
     if (changed) lines.push(`    team sent: ${String(d.body).replace(/\n---\n/g, " | ")}`);
@@ -572,6 +610,20 @@ module.exports = async function handler(req, res) {
         return res.json({ ok: true, ad, draft });
       }
       case "delete_ad": await deleteAd(String(value || "")); return res.json({ ok: true });
+      case "auto_send": {
+        // Switch automatic sending on or off, and choose the bank details on automatic quotations.
+        const cur = await autoSettings();
+        const next = { enabled: typeof req.body.enabled === "boolean" ? req.body.enabled : cur.enabled, bank: req.body.bank === "sbm" ? "sbm" : req.body.bank === "none" ? "none" : cur.bank, changed_by: who.email, changed_at: new Date().toISOString() };
+        await setSetting("auto_send", next);
+        await logEvent("auto_send_setting", next);
+        return res.json({ ok: true, auto_send: await autoSettings() });
+      }
+      case "pick_ad": {
+        // The team says which ad a client came from (or "none"); the bot then writes the reply.
+        if (!waId) return res.status(400).json({ error: "Which chat?" });
+        await pickAd(waId, String(value || ""));
+        return res.json({ ok: true, draft: await redraft(waId) });
+      }
       case "pause_contact":
         await db().from("wa_contacts").update({ bot_paused: Boolean(value) }).eq("wa_id", waId);
         return res.json({ ok: true });
@@ -613,3 +665,6 @@ module.exports = async function handler(req, res) {
     return res.status(500).json({ error: String(err?.message || err) });
   }
 };
+
+// Used by automatic sending (api/_lib/autosend.js).
+module.exports.internals = { send, sendPdf, autoQuote };

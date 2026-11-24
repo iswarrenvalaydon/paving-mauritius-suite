@@ -1,5 +1,6 @@
 // Shared PDF template for quotations, invoices, delivery notes and statements.
 // Used by the Documents tab and by WhatsApp quotations, so both look the same.
+// api/_lib/docpdf.mjs is an exact copy for automatic quotations: copy this file there after any change.
 
 export const LOGO_URL = "https://raw.githubusercontent.com/iswarrenvalaydon/paving-mauritius-suite/main/paving-logo.png";
 
@@ -26,7 +27,8 @@ export async function buildDocPdf({
   soaData={}, soaUnit=0, soaTotal=0, soaVat=0, soaTTC=0, soaDelivered=0, soaRemaining=0, includeBank=true,
 }){
   const isSOA=docType==="Statement of Account";
-  const {jsPDF} = await import("jspdf");
+  const mod = await import("jspdf");
+  const jsPDF = mod.jsPDF || (mod.default && mod.default.jsPDF) || mod.default;
   const doc = new jsPDF({orientation:"portrait",unit:"mm",format:"a4"});
   const W=210, H=297;
   const bl=[27,79,138], lb=[232,239,248], gr=[26,122,60], lg=[232,245,237];
@@ -38,9 +40,11 @@ export async function buildDocPdf({
 
   // Logo
   try{
-    const imgRes=await fetch(LOGO_URL);
-    const imgBlob=await imgRes.blob();
-    const imgB64=await new Promise(res=>{const r=new FileReader();r.onload=()=>res(r.result);r.readAsDataURL(imgBlob);});
+    // Works in the browser and on the server (automatic quotations).
+    const bytes=new Uint8Array(await (await fetch(LOGO_URL)).arrayBuffer());
+    let bin="";
+    for(let i=0;i<bytes.length;i+=0x8000) bin+=String.fromCharCode.apply(null,bytes.subarray(i,i+0x8000));
+    const imgB64=`data:image/png;base64,${btoa(bin)}`;
     doc.addImage(imgB64,"PNG",(W-35)/2,3,35,28);
   }catch{
     doc.setTextColor(255,255,255);

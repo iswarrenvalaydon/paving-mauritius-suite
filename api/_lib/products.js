@@ -5,7 +5,7 @@ const PRODUCTS = [
   { key: "200x100x80", perM2: 50, lightGrey: 16.50, colours: null },
   { key: "200x100x100", perM2: 50, lightGrey: 17.60, colours: 18.98 },
   { key: "140x140x60", perM2: 52, lightGrey: 13.50, colours: 16.50 },
-  { key: "300x300", perM2: 11.25, lightGrey: 80.01, colours: 100.05, slab: [0.3, 0.3] },
+  { key: "300x300", perM2: 11.25, lightGrey: 80.01, colours: 100.00, slab: [0.3, 0.3] },
   { key: "600x300", perM2: 5.75, lightGrey: 145.00, colours: 180.00, slab: [0.6, 0.3] },
   { key: "450x450", perM2: 5, lightGrey: 180.00, colours: 218.50, slab: [0.45, 0.45] },
   { key: "400x400", perM2: 6.25, lightGrey: 120.00, colours: null, slab: [0.4, 0.4] }, // Evergreen
@@ -49,4 +49,4 @@ function checkLine(line) {
   return out;
 }
 
-module.exports = { PRODUCTS, checkLine, SQFT_TO_M2 };
+module.exports = { PRODUCTS, checkLine, findProduct, SQFT_TO_M2 };

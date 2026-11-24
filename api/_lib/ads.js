@@ -71,6 +71,45 @@ async function deleteAd(key) {
   await setSetting("ads", ads);
 }
 
+// When WhatsApp didn't pass the ad on, the team tells the bot which ad the client came from.
+// Stored per client in setting "client_ads": { wa_id: ad key, or "none" for "not from an ad" }.
+async function pickedAds() {
+  const m = await getSetting("client_ads", {});
+  return m && typeof m === "object" && !Array.isArray(m) ? m : {};
+}
+
+async function pickAd(waId, key) {
+  const map = await pickedAds();
+  if (key !== "none") {
+    const ads = await getAds();
+    if (!ads[key]) throw new Error("That ad isn't in the list any more");
+  }
+  map[waId] = key;
+  const keys = Object.keys(map);
+  if (keys.length > 1000) keys.slice(0, keys.length - 1000).forEach((k) => delete map[k]);
+  await setSetting("client_ads", map);
+}
+
+// The client's ad: from their messages, otherwise the one the team picked.
+function resolveAd(messages, picked, ads) {
+  const fromChat = latestAd(messages);
+  if (fromChat) return fromChat;
+  if (!picked || picked === "none" || !ads[picked]) return null;
+  return { key: picked, label: ads[picked].label || "Facebook ad", url: ads[picked].url || "", picked: true };
+}
+
+// The client's first message didn't reach the Suite (very often the automatic text after tapping
+// an ad), nothing has been sent to them yet, and we can't tell which ad it was: ask the team.
+const NOT_PASSED = /^\[Message not passed on by WhatsApp/;
+function needsAdPick(messages, picked, ads) {
+  if (picked) return false; // the team already answered ("none" included)
+  if (!Object.values(ads).some((a) => a && a.design)) return false; // no described ads to choose from
+  const list = messages || [];
+  if (list.some((m) => m.direction === "out")) return false;
+  const firstIn = list.find((m) => m.direction === "in" && m.type !== "call");
+  return Boolean(firstIn && (firstIn.type === "unsupported" || NOT_PASSED.test(String(firstIn.body || ""))) && !latestAd(list));
+}
+
 // What the bot is told about the client's ad.
 function adPrompt(ad, info) {
   if (!ad) return "";
@@ -80,4 +119,4 @@ function adPrompt(ad, info) {
   return `This client came from our Facebook ad "${ad.label}", but the team hasn't told you yet what this ad's picture shows. For a first reply, thank them and ask for their measurements as usual (name the product only as the ad text does). If they have already sent measurements, don't ask the client which slab, size or colour: give the area and set needs_team so the team can tell you what the ad shows.`;
 }
 
-module.exports = { adKey, adText, adFromBody, latestAd, getAds, noteAd, describeAd, deleteAd, adPrompt };
+module.exports = { adKey, adText, adFromBody, latestAd, getAds, noteAd, describeAd, deleteAd, adPrompt, pickedAds, pickAd, resolveAd, needsAdPick };

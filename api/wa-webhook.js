@@ -1,11 +1,13 @@
 // Receives every WhatsApp event for 5725 4201 from 360dialog:
 // client messages, replies typed on the business phone (echoes), history sync and contacts.
-// It stores them in Supabase and asks Claude for a suggested reply. It never sends anything.
+// It stores them in Supabase and asks Claude for a suggested reply. Nothing is sent unless
+// automatic sending is switched on in Setup (see _lib/autosend.js).
 const { db, hookToken, safeEqual, getSetting, logEvent, insertDraft, sendText } = require("./_lib/common");
 const { draftReply, draftRow, hasContent } = require("./_lib/drafter");
 const { adText, noteAd } = require("./_lib/ads");
 const { mentionsRavin, autoRefer } = require("./_lib/referrals");
 const { handleFactoryReport } = require("./_lib/factory");
+const { autoSend } = require("./_lib/autosend");
 
 let waitUntil = null;
 try { ({ waitUntil } = require("@vercel/functions")); } catch { waitUntil = null; }
@@ -121,7 +123,8 @@ async function draftFor(waId, triggerId) {
     if (!draft || !last || last.id !== triggerId) return;
     if (!hasContent(draft)) return;
     await supersedeDrafts(waId);
-    await insertDraft(draftRow(waId, triggerId, draft));
+    const row = await insertDraft(draftRow(waId, triggerId, draft));
+    await autoSend(waId, row); // only when switched on in Setup, and only simple replies
   } catch (err) {
     await logEvent("draft_error", { wa_id: waId, message: String(err?.message || err) });
     await db().from("wa_drafts").insert({
@@ -282,4 +285,4 @@ module.exports = async function handler(req, res) {
   return res.status(200).json({ ok: true });
 };
 
-module.exports.config = { maxDuration: 60 };
+module.exports.config = { maxDuration: 300 };
