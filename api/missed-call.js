@@ -46,11 +46,27 @@ async function handleMissedCall({ number, kind, name }) {
   if (pending && pending.length) return { ok: true, wa_id: waId, draft: "already waiting" };
 
   const recent = contact?.last_inbound_at && now - new Date(contact.last_inbound_at) < 23 * 3600 * 1000;
-  await db().from("wa_drafts").insert({
+  const { data: draft } = await db().from("wa_drafts").insert({
     wa_id: waId, body: MISSED_TEXT, needs_team: false,
     team_note: `${label}. Approve to send the missed-call message${recent ? "" : " (sent as WhatsApp's approved message, so your edits aren't used)"}.`,
     quote: { template: "missed_call" },
-  });
+  }).select().single();
+
+  // With automatic sending on, the message goes out by itself (not at night: it waits for the morning team).
+  const { autoSettings, mauritiusHour } = require("./_lib/autosend");
+  const cfg = await autoSettings();
+  const h = mauritiusHour(now);
+  if (cfg.enabled && draft && h >= 7 && h < 23) {
+    try {
+      await require("./wa-admin").internals.send(waId, MISSED_TEXT, draft.id);
+      await logEvent("auto_sent", { wa_id: waId, draft_id: draft.id, missed_call: true });
+      return { ok: true, wa_id: waId, sent: true };
+    } catch (err) {
+      const msg = String(err?.message || err).slice(0, 300);
+      await db().from("wa_drafts").update({ needs_team: true, team_note: `${label}. ⚠️ Automatic sending failed, please send it: ${msg}` }).eq("id", draft.id);
+      await logEvent("auto_send_error", { wa_id: waId, draft_id: draft.id, message: msg });
+    }
+  }
   return { ok: true, wa_id: waId };
 }
 
