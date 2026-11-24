@@ -25,7 +25,7 @@ const PRODUCTS = {
   KB125LG: "Kerb 450x200x125 Light Grey",
 };
 const RAW = {
-  OPC: "Cement 42.5", RS04: "Rock Sand 0.4", AGG38: "Aggregate 3.8", PCE: "Pocket Cement",
+  OPC: "Cement 42.5", RS04: "Rock Sand 0.4", AGG38: "Chipping 4/6", PCE: "Pocket Cement",
   BFBL: "Bayferrous Black", BFRD: "Bayferrous Red", BFTC: "Bayferrous Terracota", BFYL: "Bayferrous Yellow",
   BFBN: "Bayferrous Brown", BFWH: "Bayferrous White", FIBR: "Reinforcement Fibre",
 };
@@ -59,6 +59,7 @@ function prompt() {
   return `You record factory reports for Paving Mauritius Ltd from WhatsApp messages sent by staff (English, French or Mauritian Creole, often short: "2000 pb60 lg", "zordi 1500 cobble DG", "40 ton rock sand Akshay", a photo of a delivery note).
 Today in Mauritius: ${todayMU()}.
 Product codes: ${Object.entries(PRODUCTS).map(([c, n]) => `${c} = ${n}`).join("; ")}.
+Raw material names they use: "rock sand"/"0/4"/"zero four"/"roxanne" = RS04; "chipping"/"4/6"/"four six"/"gravier" = AGG38 (we no longer use 3/8); "cement"/"ciment" = OPC (the cement truck fills the silo; a full silo load is often given in tons).
 Colours: LG = Light Grey, DG = Dark Grey (black/gris foncé), RD = Red, TC = Terracotta, BN = Brown. "Pavé"/"PB"/"brick" = paving brick; "slab"/"dalle"; "cobble"; "evergreen"/"grass".
 Raw material codes: ${Object.entries(RAW).map(([c, n]) => `${c} = ${n}`).join("; ")}.
 Kinds of entries:

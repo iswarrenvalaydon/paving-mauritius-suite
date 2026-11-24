@@ -1,5 +1,5 @@
-// Everything the Suite's WhatsApp tab does goes through here, protected by the SUITE_PASSWORD
-// set in Vercel. The browser never sees the WhatsApp, Claude or Supabase secret keys.
+// Everything the Suite's WhatsApp tab does goes through here, protected by the team login (Supabase Auth)
+// (wa_settings.team_emails). The browser never sees the WhatsApp, Claude or Supabase secret keys.
 const { splitReply, replyTarget, db, hookToken, missedCallToken, safeEqual, d360, sendText, downloadMedia, uploadMedia, sendDocument, insertDraft, getSetting, setSetting, logEvent } = require("./_lib/common");
 const { draftReply, draftRow } = require("./_lib/drafter");
 const { latestAd, getAds, describeAd, deleteAd } = require("./_lib/ads");
@@ -401,18 +401,14 @@ async function teamEmails() {
   return Array.isArray(list) ? list.map((e) => String(e).toLowerCase()) : [];
 }
 
-// Who is calling: a logged-in team member (Bearer token), or the old Suite password
-// (still accepted, so the first login can be created and nothing breaks meanwhile).
+// Who is calling: only a logged-in team member (Bearer token). The old Suite password no longer
+// opens anything; new people are added by a team member in Setup → Team logins.
 async function caller(req) {
   const auth = String(req.headers.authorization || "");
-  if (auth.startsWith("Bearer ") && auth.length > 20) {
-    const { data, error } = await db().auth.getUser(auth.slice(7));
-    const email = String(data?.user?.email || "").toLowerCase();
-    if (!error && email && (await teamEmails()).includes(email)) return { email };
-    return null;
-  }
-  const expected = process.env.SUITE_PASSWORD;
-  if (expected && safeEqual(req.headers["x-suite-password"], expected)) return { email: null, password: true };
+  if (!auth.startsWith("Bearer ") || auth.length <= 20) return null;
+  const { data, error } = await db().auth.getUser(auth.slice(7));
+  const email = String(data?.user?.email || "").toLowerCase();
+  if (!error && email && (await teamEmails()).includes(email)) return { email };
   return null;
 }
 
@@ -464,8 +460,6 @@ module.exports = async function handler(req, res) {
   }
 
   const { action, wa_id: rawId, body, draft_id: draftId, value } = req.body || {};
-  // With the old password, only the first login can be made: everything else needs a team login.
-  if (who.password && action !== "create_login") return res.status(401).json({ error: "Please log in with your email." });
   if (action === "create_login") {
     try { return res.json(await createLogin(req.body.email, req.body.password)); }
     catch (e) { return res.status(400).json({ error: String(e.message || e) }); }

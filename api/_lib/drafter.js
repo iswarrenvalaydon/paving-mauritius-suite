@@ -4,7 +4,7 @@ const { db, getSetting, fmtTime, downloadMedia, REPLY_MARK, quoteSnippet } = req
 const { RULEBOOK } = require("./rulebook");
 const { checkLine } = require("./products");
 const { getAds, latestAd, adPrompt } = require("./ads");
-const { albums: photoAlbums, knownAlbums } = require("./photos");
+const { albums: photoAlbums, knownAlbums, getPhotos } = require("./photos");
 
 const MODEL = process.env.BOT_MODEL || "claude-sonnet-5-5";
 const HISTORY_LIMIT = 40;
@@ -202,23 +202,28 @@ async function draftReply(waId) {
   const adInfo = ad ? ads[ad.key] : null;
   const adUnknown = Boolean(ad && !(adInfo && adInfo.design));
   const { labels, blocks } = await mediaBlocks(messages);
+  const refs = await referencePhotos(messages);
   const content = [
     { type: "text", text: `Conversation so far (oldest first):\n${transcript(messages, labels)}` },
     ...(ad ? [{ type: "text", text: adPrompt(ad, adInfo) }] : []),
     { type: "text", text: photoPrompt(albumList) },
     ...(blocks.length ? [{ type: "text", text: "Attachments from the client:" }, ...blocks] : []),
+    ...refs,
     { type: "text", text: "Write the JSON for our next message." },
   ];
-  const res = await fetch("https://api.anthropic.com/v1/messages", {
+  const ask = (blocksToSend) => fetch("https://api.anthropic.com/v1/messages", {
     method: "POST",
     headers: { "x-api-key": key, "anthropic-version": "2023-06-01", "content-type": "application/json" },
     body: JSON.stringify({
       model: MODEL,
       max_tokens: 4000,
       system: systemPrompt(typeof rulebook === "string" ? rulebook : RULEBOOK, contact, examples, String(ravin || "").replace(/\D/g, "")),
-      messages: [{ role: "user", content }],
+      messages: [{ role: "user", content: blocksToSend }],
     }),
   });
+  let res = await ask(content);
+  // If one of our reference photos can't be fetched, try again without them rather than fail.
+  if (!res.ok && refs.length) res = await ask(content.filter((b) => !refs.includes(b)));
   const data = await res.json();
   if (!res.ok) throw new Error(`Claude: ${data?.error?.message || res.status}`);
   const toolUse = (data.content || []).find((c) => c.type === "tool_use" && c.name === "draft_reply");
@@ -274,6 +279,32 @@ function cleanReferral(r) {
   const f = (v) => String(v || "").replace(/\s+/g, " ").trim().slice(0, 120);
   const out = { client_name: f(r.client_name), location: f(r.location), product: f(r.product), area: f(r.area) };
   return Object.values(out).some(Boolean) ? out : null; // an empty object means "no referral"
+}
+
+// When the client has just sent a photo, show Claude one photo of each of our albums so it can
+// compare: most client photos are our own pictures from Facebook or the website.
+async function referencePhotos(messages) {
+  let lastOut = -1;
+  messages.forEach((m, i) => { if (m.direction === "out") lastOut = i; });
+  const newPhoto = messages.slice(lastOut + 1).some((m) => m.direction === "in" && m.type === "image");
+  if (!newPhoto) return [];
+  let photos = [];
+  try { photos = await getPhotos(); } catch { return []; }
+  const seen = new Set();
+  const urls = new Set();
+  const refs = [];
+  for (const p of photos) {
+    if (seen.has(p.album) || urls.has(p.url) || !/^https:\/\//.test(p.url || "")) continue; // e.g. 80 mm reuses the 60 mm photos
+    seen.add(p.album);
+    urls.add(p.url);
+    refs.push({ type: "text", text: `[Our photo – ${p.album}]` }, { type: "image", source: { type: "url", url: p.url } });
+    if (seen.size >= 16) break;
+  }
+  if (!refs.length) return [];
+  return [
+    { type: "text", text: "Reference photos of OUR products and designs, one per album (not from the client). Compare the client's photo with them: if it clearly shows one of these products or designs (often it is the very same picture, from our Facebook page or website), that is what the client wants: name it with its full size and colour, confidently. If you are not sure, or it isn't one of ours, don't guess: set needs_team and ask the team in team_note." },
+    ...refs,
+  ];
 }
 
 // Tells the bot which photo albums exist, so it can attach them.
