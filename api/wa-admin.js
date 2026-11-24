@@ -395,16 +395,86 @@ async function status(req) {
   return out;
 }
 
+// ---- Team logins (Supabase Auth). Only emails in wa_settings.team_emails may use the Suite. ----
+async function teamEmails() {
+  const list = await getSetting("team_emails", []);
+  return Array.isArray(list) ? list.map((e) => String(e).toLowerCase()) : [];
+}
+
+// Who is calling: a logged-in team member (Bearer token), or the old Suite password
+// (still accepted, so the first login can be created and nothing breaks meanwhile).
+async function caller(req) {
+  const auth = String(req.headers.authorization || "");
+  if (auth.startsWith("Bearer ") && auth.length > 20) {
+    const { data, error } = await db().auth.getUser(auth.slice(7));
+    const email = String(data?.user?.email || "").toLowerCase();
+    if (!error && email && (await teamEmails()).includes(email)) return { email };
+    return null;
+  }
+  const expected = process.env.SUITE_PASSWORD;
+  if (expected && safeEqual(req.headers["x-suite-password"], expected)) return { email: null, password: true };
+  return null;
+}
+
+async function findUser(email) {
+  for (let page = 1; page <= 10; page += 1) {
+    const { data, error } = await db().auth.admin.listUsers({ page, perPage: 200 });
+    if (error) throw new Error(error.message);
+    const hit = (data?.users || []).find((u) => String(u.email || "").toLowerCase() === email);
+    if (hit || (data?.users || []).length < 200) return hit || null;
+  }
+  return null;
+}
+
+async function createLogin(rawEmail, password) {
+  const email = String(rawEmail || "").trim().toLowerCase();
+  if (!/^[^@\s]+@[^@\s]+\.[^@\s]+$/.test(email)) throw new Error("Enter a valid email");
+  if (String(password || "").length < 8) throw new Error("The password needs at least 8 characters");
+  const existing = await findUser(email);
+  if (existing) {
+    const { error } = await db().auth.admin.updateUserById(existing.id, { password, email_confirm: true });
+    if (error) throw new Error(error.message);
+  } else {
+    const { error } = await db().auth.admin.createUser({ email, password, email_confirm: true });
+    if (error) throw new Error(error.message);
+  }
+  const team = await teamEmails();
+  if (!team.includes(email)) await setSetting("team_emails", [...team, email]);
+  await logEvent("login_saved", { email });
+  return { ok: true, email };
+}
+
+async function removeLogin(rawEmail, me) {
+  const email = String(rawEmail || "").trim().toLowerCase();
+  const team = await teamEmails();
+  if (me && email === me && team.length === 1) throw new Error("You can't remove the last login");
+  await setSetting("team_emails", team.filter((e) => e !== email));
+  const user = await findUser(email);
+  if (user) await db().auth.admin.deleteUser(user.id);
+  await logEvent("login_removed", { email });
+  return { ok: true };
+}
+
 module.exports = async function handler(req, res) {
   if (req.method !== "POST") return res.status(405).end();
-  const expected = process.env.SUITE_PASSWORD;
-  if (!expected) return res.status(503).json({ error: "SUITE_PASSWORD is not set in Vercel yet." });
-  if (!safeEqual(req.headers["x-suite-password"], expected)) {
+  const who = await caller(req).catch(() => null);
+  if (!who) {
     await sleep(1200); // slow down guessing
-    return res.status(401).json({ error: "Wrong password" });
+    return res.status(401).json({ error: "Please log out and log in again." });
   }
 
   const { action, wa_id: rawId, body, draft_id: draftId, value } = req.body || {};
+  // With the old password, only the first login can be made: everything else needs a team login.
+  if (who.password && action !== "create_login") return res.status(401).json({ error: "Please log in with your email." });
+  if (action === "create_login") {
+    try { return res.json(await createLogin(req.body.email, req.body.password)); }
+    catch (e) { return res.status(400).json({ error: String(e.message || e) }); }
+  }
+  if (action === "team") return res.json({ team: await teamEmails() });
+  if (action === "remove_login") {
+    try { return res.json(await removeLogin(req.body.email, who.email)); }
+    catch (e) { return res.status(400).json({ error: String(e.message || e) }); }
+  }
   const waId = digits(rawId);
   try {
     switch (action) {

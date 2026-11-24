@@ -1,6 +1,7 @@
 import { useState, useRef, useEffect } from "react";
 import { supabase } from "./supabaseClient";
 import WhatsAppInbox from "./WhatsAppInbox";
+import AuthGate, { logOut } from "./AuthGate";
 import { LOGO_URL, COMMERCIAL_NAME, SUPPLIER, fmt, docPrefix, buildDocPdf } from "./docPdf";
 
 const BLUE = "#1B4F8A";
@@ -16,7 +17,11 @@ const DOC_TYPES = ["Quotation","Invoice","Delivery Note","Statement of Account"]
 const EMPTY_ITEM = {desc:"",qty:"",unitPrice:"",code:""};
 const EMPTY_CLIENT = {name:"",address:"",city:"",area:"",brn:"",vat:"",contact:"",email:""};
 
-export default function App(){
+export default function Root(){
+  return <AuthGate><App/></AuthGate>;
+}
+
+function App(){
   const [tab,setTab]=useState("generator");
   const [docType,setDocType]=useState("Quotation");
   const [refNum,setRefNum]=useState("001");
@@ -405,6 +410,7 @@ ${bankLine}${closing}`;
           <div style={{fontWeight:700,fontSize:17,letterSpacing:0.5}}>Paving Mauritius – Business Suite</div>
           <div style={{fontSize:11,opacity:0.75}}>Invoice · Quotation · Delivery Note · Statement of Account</div>
         </div>
+        <button onClick={logOut} style={{marginLeft:"auto",background:"transparent",color:"#fff",border:"1px solid #fff8",borderRadius:6,padding:"6px 10px",fontSize:12,cursor:"pointer"}}>Log out</button>
       </div>
 
       {/* Tabs */}

@@ -1,9 +1,10 @@
 import { useState, useEffect, useCallback, useRef } from "react";
 import QuoteEditor from "./QuoteEditor";
 import PhotoManager from "./PhotoManager";
+import { supabase } from "./supabaseClient";
 
 // WhatsApp tab: chats on 5725 4201, the bot's suggested replies, and approve / edit / discard.
-// All data goes through /api/wa-admin, which checks the Suite password set in Vercel.
+// All data goes through /api/wa-admin, which checks the team member's login (Supabase session).
 
 const BLUE = "#1B4F8A";
 const LIGHT_BLUE = "#E8EFF8";
@@ -12,11 +13,6 @@ const LIGHT_GREEN = "#E8F5ED";
 const ORANGE = "#B45309";
 const LIGHT_ORANGE = "#FEF3C7";
 const MID_GREY = "#666666";
-const PW_KEY = "pm_suite_wa_password";
-
-function readSaved(){ try{ return window.localStorage.getItem(PW_KEY)||""; }catch{ return ""; } }
-function save(pw){ try{ window.localStorage.setItem(PW_KEY,pw); }catch{ /* storage unavailable */ } }
-function forget(){ try{ window.localStorage.removeItem(PW_KEY); }catch{ /* storage unavailable */ } }
 
 function when(iso){
   if(!iso) return "";
@@ -53,10 +49,9 @@ function sourceLabel(m){
 
 const btn=(bg,fg,extra={})=>({background:bg,color:fg,border:"none",borderRadius:8,padding:"10px 16px",cursor:"pointer",fontWeight:600,fontSize:14,...extra});
 
+
 export default function WhatsAppInbox(){
-  const [password,setPassword]=useState(readSaved);
-  const [pwInput,setPwInput]=useState("");
-  const [authed,setAuthed]=useState(false);
+  const authed=true; // the whole Suite is behind the login
   const [view,setView]=useState("list");
   const [chats,setChats]=useState([]);
   const [botEnabled,setBotEnabled]=useState(true);
@@ -82,18 +77,19 @@ export default function WhatsAppInbox(){
   const draftIdRef=useRef(null);
   const bottomRef=useRef(null);
 
-  const api=useCallback(async(action,payload={},pw=password)=>{
+  const api=useCallback(async(action,payload={})=>{
+    const {data:auth}=await supabase.auth.getSession();
     const res=await fetch("/api/wa-admin",{
       method:"POST",
-      headers:{"Content-Type":"application/json","x-suite-password":pw},
+      headers:{"Content-Type":"application/json",Authorization:`Bearer ${auth?.session?.access_token||""}`},
       body:JSON.stringify({action,...payload}),
     });
     let data={};
     try{ data=await res.json(); }catch{ data={error:`Server error (${res.status})`}; }
-    if(res.status===401){ forget(); setAuthed(false); throw new Error("Wrong password"); }
+    if(res.status===401) throw new Error(data.error||"Please log out and log in again.");
     if(!res.ok) throw new Error(data.error||`Error ${res.status}`);
     return data;
-  },[password]);
+  },[]);
 
   const loadChats=useCallback(async()=>{
     try{
@@ -119,14 +115,6 @@ export default function WhatsAppInbox(){
     }catch(e){ setError(e.message); }
   },[api]);
 
-  // Log in with the saved password, if there is one.
-  useEffect(()=>{
-    if(!password||authed) return;
-    (async()=>{
-      try{ await api("chats"); setAuthed(true); }catch{ setPassword(""); }
-    })();
-  },[password,authed,api]);
-
   // Refresh the chat list, and the open chat, every 15 seconds.
   useEffect(()=>{
     if(!authed) return undefined;
@@ -141,17 +129,6 @@ export default function WhatsAppInbox(){
   useEffect(()=>{
     if(view==="chat"&&bottomRef.current) bottomRef.current.scrollIntoView({block:"end"});
   },[chat,view]);
-
-  async function login(){
-    const pw=pwInput.trim();
-    if(!pw) return;
-    setBusy(true); setError("");
-    try{
-      await api("chats",{},pw);
-      save(pw); setPassword(pw); setAuthed(true); setPwInput("");
-    }catch(e){ setError(e.message==="Wrong password"?"Wrong password, try again.":e.message); }
-    setBusy(false);
-  }
 
   async function showMedia(messageId){
     setMedia(m=>({...m,[messageId]:{loading:true}}));
@@ -241,21 +218,6 @@ export default function WhatsAppInbox(){
   async function connectWebhook(){
     const r=await act("connect_webhook",{},"✅ WhatsApp connected to the Suite");
     if(r) openSetup();
-  }
-
-  // ── Not logged in ──────────────────────────────
-  if(!authed){
-    return(
-      <div style={{background:"#fff",borderRadius:12,padding:24,boxShadow:"0 2px 10px #0001",maxWidth:420,margin:"0 auto"}}>
-        <div style={{fontWeight:700,fontSize:18,color:BLUE,marginBottom:6}}>💬 WhatsApp</div>
-        <div style={{fontSize:13,color:MID_GREY,marginBottom:16}}>Enter the Suite password to see the chats on 5725 4201.</div>
-        <input type="password" value={pwInput} onChange={e=>setPwInput(e.target.value)} onKeyDown={e=>{ if(e.key==="Enter") login(); }}
-          placeholder="Password" autoComplete="current-password"
-          style={{width:"100%",boxSizing:"border-box",padding:12,fontSize:15,border:"1px solid #ccc",borderRadius:8,marginBottom:12}}/>
-        <button onClick={login} disabled={busy} style={btn(BLUE,"#fff",{width:"100%"})}>{busy?"Checking…":"Open WhatsApp"}</button>
-        {error&&<div style={{color:"#B00020",marginTop:12,fontSize:13}}>{error}</div>}
-      </div>
-    );
   }
 
   const header=(
@@ -396,7 +358,7 @@ export default function WhatsAppInbox(){
             <div style={{marginTop:16,fontSize:12,color:MID_GREY}}>
               Staff numbers (no bot replies): {(setup.staff_numbers||[]).map(n=>"+"+n).join(", ")||"none"}
             </div>
-            <button onClick={()=>{ forget(); setPassword(""); setAuthed(false); }} style={btn("#eee","#333",{marginTop:16,fontSize:13,padding:"8px 12px"})}>Log out on this device</button>
+            <TeamLogins api={api} act={act} busy={busy}/>
           </>
         )}
       </div>
@@ -648,6 +610,36 @@ export default function WhatsAppInbox(){
           {c.unread>0&&<span style={{background:GREEN,color:"#fff",borderRadius:12,fontSize:11,fontWeight:700,padding:"2px 7px"}}>{c.unread}</span>}
         </button>
       ))}
+    </div>
+  );
+}
+
+// Who can log in to the Suite (and the factory app): add a login, or remove one.
+function TeamLogins({api,act,busy}){
+  const [team,setTeam]=useState(null);
+  const [email,setEmail]=useState("");
+  const [pw,setPw]=useState("");
+  const load=useCallback(async()=>{ try{ const r=await api("team"); setTeam(r.team||[]); }catch{ setTeam([]); } },[api]);
+  useEffect(()=>{ load(); },[load]);
+  return(
+    <div>
+      <div style={{marginTop:18,fontWeight:700,color:BLUE,fontSize:14}}>Team logins</div>
+      <div style={{fontSize:12,color:MID_GREY,marginBottom:6}}>Only these emails can open the Suite and the factory app. To add someone (e.g. Julien), enter their email and a password, then give them the password.</div>
+      {(team||[]).map(e=>(
+        <div key={e} style={{display:"flex",alignItems:"center",gap:8,fontSize:13,padding:"4px 0"}}>
+          <span style={{flex:1}}>👤 {e}</span>
+          <button onClick={async()=>{ if(window.confirm(`Remove ${e}'s login?`)){ const r=await act("remove_login",{email:e},"Login removed"); if(r) load(); } }} disabled={busy}
+            style={btn("#fff","#B00020",{border:"1px solid #B00020",padding:"3px 8px",fontSize:12})}>Remove</button>
+        </div>
+      ))}
+      <div style={{display:"flex",gap:6,flexWrap:"wrap",marginTop:6}}>
+        <input type="email" value={email} onChange={e=>setEmail(e.target.value)} placeholder="Email" autoComplete="off"
+          style={{flex:1,minWidth:150,padding:8,fontSize:13,borderRadius:6,border:"1px solid #ccc"}}/>
+        <input type="password" value={pw} onChange={e=>setPw(e.target.value)} placeholder="Password (8+ characters)" autoComplete="new-password"
+          style={{flex:1,minWidth:150,padding:8,fontSize:13,borderRadius:6,border:"1px solid #ccc"}}/>
+        <button onClick={async()=>{ const r=await act("create_login",{email,password:pw},"Login saved"); if(r){ setEmail(""); setPw(""); load(); } }} disabled={busy||!email.trim()||pw.length<8}
+          style={btn(GREEN,"#fff",{padding:"8px 12px",fontSize:13})}>Add / change password</button>
+      </div>
     </div>
   );
 }
