@@ -591,6 +591,11 @@ module.exports = async function handler(req, res) {
         return res.json({ numbers: await getSetting("factory_reporters", []) });
       }
       case "review_export": return res.json({ text: await reviewExport(Number(value) || 7) });
+      case "missed_backlog": {
+        const mb = require("./_lib/missedbacklog");
+        if (value === "send") { const r = await mb.sendBacklog(20); await logEvent("missed_backlog_by", { by: who.email, ...r, failed: r.failed.length }); return res.json({ ok: true, ...r }); }
+        return res.json({ calls: await mb.candidates() });
+      }
       case "past_referrals": return res.json({ clients: await pastRavinMentions() });
       case "refer_ravin": {
         const referral = await autoRefer(waId, "check");

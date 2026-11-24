@@ -60,6 +60,7 @@ export default function WhatsAppInbox(){
   const [draftText,setDraftText]=useState("");
   const [photoSel,setPhotoSel]=useState([]); // photo albums the bot suggested, still ticked
   const [albumList,setAlbumList]=useState(null); // for "Send photos" in a chat
+  const [oldCalls,setOldCalls]=useState(null); // unanswered missed calls waiting to be messaged
   const [pastRefs,setPastRefs]=useState(null); // clients given Ravin's number without Ravin being told
   const [manualText,setManualText]=useState("");
   const [busy,setBusy]=useState(false);
@@ -272,6 +273,18 @@ export default function WhatsAppInbox(){
               <button onClick={connectWebhook} disabled={busy||!setup.tables} style={btn(GREEN,"#fff",{marginTop:14,width:"100%"})}>
                 {busy?"Connecting…":"Connect WhatsApp to the Suite"}
               </button>
+            )}
+            <div style={{marginTop:18,fontWeight:700,color:BLUE,fontSize:14}}>Old missed calls</div>
+            <div style={{fontSize:12,color:MID_GREY,marginBottom:6}}>Sends the "Sorry we missed your call" message once to everyone who called and was never answered. Saved contacts, staff, and anyone already answered or who wrote since are skipped.</div>
+            <button onClick={async()=>{ const r=await act("missed_backlog",{value:"preview"},""); if(r) setOldCalls(r.calls||[]); }} disabled={busy}
+              style={btn("#fff",BLUE,{border:`1px solid ${BLUE}`,padding:"6px 10px",fontSize:12,marginBottom:6})}>🔎 Check old missed calls</button>
+            {oldCalls&&!oldCalls.length&&<div style={{fontSize:12,color:MID_GREY,marginBottom:6}}>No unanswered missed calls.</div>}
+            {oldCalls&&oldCalls.length>0&&(
+              <div style={{marginBottom:8}}>
+                <div style={{fontSize:12,marginBottom:6}}><b>{oldCalls.length}</b> caller{oldCalls.length>1?"s":""} will get the message: {oldCalls.slice(0,8).map(c=>`+${c.wa_id}`).join(", ")}{oldCalls.length>8?"…":""}</div>
+                <button onClick={async()=>{ if(!window.confirm(`Send the missed-call message to ${oldCalls.length} caller(s) now?`)) return; const r=await act("missed_backlog",{value:"send"},""); if(r){ window.alert(`Sent: ${r.sent}${r.failed.length?`\nFailed: ${r.failed.length} (${r.failed[0].error})`:""}${r.remaining?`\n${r.remaining} still waiting, tap Send again`:""}`); const p=await act("missed_backlog",{value:"preview"},""); if(p) setOldCalls(p.calls||[]); } }} disabled={busy}
+                  style={btn(GREEN,"#fff",{padding:"6px 12px",fontSize:13})}>Send to all ({Math.min(oldCalls.length,20)} at a time)</button>
+              </div>
             )}
             <div style={{marginTop:18,fontWeight:700,color:BLUE,fontSize:14}}>Layer referrals (Ravin)</div>
             <div style={{fontSize:12,color:MID_GREY,marginBottom:6}}>When a client wants a layer, the bot gives Ravin's number and, once you approve, sends Ravin the client's name, number, location, product and area. If you or Julien give Ravin's number yourselves (from the Suite or the phone), Ravin is told too, once per client. When the client pays, tap the payment button in their chat to update Ravin.</div>
