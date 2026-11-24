@@ -1,6 +1,7 @@
 // Automatic sending, switched on or off in Setup (setting "auto_send"). OFF by default:
 // until the team switches it on, every suggestion waits for approval as before.
 // When on, a suggestion goes out by itself only if nothing in it needs a person (see holdReason).
+// Quotations always wait for approval, so the team chooses the bank details each time.
 const { db, getSetting, logEvent } = require("./common");
 const { findProduct } = require("./products");
 
@@ -25,6 +26,14 @@ function quoteArea(q) {
   }));
 }
 
+// An estimate in text ("about 134 slabs… Rs 32,836.70") counts as a quotation: it waits too.
+// Unit prices (Rs 145 per slab) can go out by themselves.
+function hasEstimate(text) {
+  const t = String(text || "");
+  if (/\b(estimat|total|devis|quotation)/i.test(t) && /Rs\.?\s?\d/i.test(t)) return true;
+  return [...t.matchAll(/Rs\.?\s?([\d,]+(?:\.\d+)?)/gi)].some((m) => Number(m[1].replace(/,/g, "")) >= 1000);
+}
+
 // Why this suggestion must wait for the team, or null if it can go out by itself.
 async function holdReason(waId, row, now = new Date()) {
   if (!row) return "no suggestion";
@@ -35,9 +44,10 @@ async function holdReason(waId, row, now = new Date()) {
   if (x.template) return "missed-call template";
   const quotes = Array.isArray(x.quotes) ? x.quotes : [];
   if (!String(row.body || "").trim() && !quotes.length && !x.attach && !(x.photos || []).length) return "nothing to send";
+  if (quotes.length) return "quotation (approve it and choose the bank details)";
+  if (hasEstimate(row.body)) return "price estimate for the client's area";
   const h = mauritiusHour(now);
   if (h >= 23 || h < 7) return "night (chat hours end at 11 p.m.)";
-  if (quotes.some((q) => quoteArea(q) > 150)) return "large order";
   const { data } = await db().from("wa_messages").select("direction,source,type,sent_at").eq("wa_id", waId).order("sent_at", { ascending: false }).limit(60);
   const list = data || []; // newest first
   for (const m of list) {
@@ -80,4 +90,4 @@ async function autoSend(waId, row) {
   }
 }
 
-module.exports = { autoSettings, holdReason, autoSend, quoteArea, mauritiusHour };
+module.exports = { autoSettings, holdReason, autoSend, quoteArea, mauritiusHour, hasEstimate };

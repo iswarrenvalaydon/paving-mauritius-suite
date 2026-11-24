@@ -10,5 +10,15 @@
     "api/wa-admin.js": {
       "maxDuration": 60
     }
-  }
+  },
+  "crons": [
+    {
+      "path": "/api/factory-check?step=ask",
+      "schedule": "0 5 * * *"
+    },
+    {
+      "path": "/api/factory-check?step=alert",
+      "schedule": "0 7 * * *"
+    }
+  ]
 }

@@ -13,6 +13,21 @@ const TEMPLATES = {
     body: "Hello bro, payment update for the client we referred to you.\nClient: {{1}}\nNumber: {{2}}\nPayment: {{3}}\nArea given to us: {{4}}\nIf the area on site is different, please let us know before delivery. Thank you!",
     example: ["Jean Dupont", "+230 5762 9412", "Paid in full", "20 m2"],
   },
+  sales: {
+    name: "sales_manager_lead",
+    body: "Hey Paving: a client needs our Sales Manager to contact them.\nClient: {{1}}\nNumber: {{2}}\nDetails: {{3}}",
+    example: ["Jsd Battery Centre Ltd", "+230 5767 5024", "About 190 m2, slabs 600x300 Light Grey + 300x300 Dark Grey"],
+  },
+  breakdownCheck: {
+    name: "breakdown_check",
+    body: "Hey Paving: the factory breakdown reported on {{1}} ({{2}}) isn't marked as repaired yet. Is it repaired? Reply \"repaired\" or tell me what's still wrong.",
+    example: ["24 Nov", "mixer motor"],
+  },
+  breakdownAlert: {
+    name: "breakdown_alert",
+    body: "Hey Paving: no answer about the factory breakdown reported on {{1}} ({{2}}). I asked {{3}} this morning and it isn't marked as repaired yet.",
+    example: ["24 Nov", "mixer motor", "Julien"],
+  },
   missed: {
     name: "missed_call",
     body: "Hello, this is Paving Mauritius Ltd. Sorry we missed your call! How can we help you? You can reply here on WhatsApp.",
@@ -48,6 +63,53 @@ async function sendLayerTemplate(key, params) {
   const id = data?.messages?.[0]?.id || `local-${Date.now()}`;
   await db().from("wa_contacts").upsert({ wa_id: ravin, name: "Ravin (layer)", is_staff: true }, { onConflict: "wa_id" });
   await storeOut(ravin, id, "template", t.body.replace(/\{\{(\d)\}\}/g, (_, n) => params[Number(n) - 1]));
+  return id;
+}
+
+// A message to someone on the team (Julien, Iswarren): normal text while their 24-hour window is
+// open, otherwise the approved template with the same words.
+async function sendTeamMessage(to, key, params) {
+  const num = String(to || "").replace(/\D/g, "");
+  if (!num) throw new Error("No number saved for this message");
+  const t = TEMPLATES[key];
+  const text = t.body.replace(/\{\{(\d)\}\}/g, (_, n) => params[Number(n) - 1]);
+  const { data: c } = await db().from("wa_contacts").select("last_inbound_at").eq("wa_id", num).maybeSingle();
+  const open = c?.last_inbound_at && Date.now() - new Date(c.last_inbound_at) < 23 * 3600 * 1000;
+  let id = null;
+  if (open) {
+    try {
+      const data = await d360("/messages", { method: "POST", body: { messaging_product: "whatsapp", recipient_type: "individual", to: num, type: "text", text: { body: text } } });
+      id = data?.messages?.[0]?.id || null;
+    } catch { id = null; }
+  }
+  if (!id) {
+    const data = await d360("/messages", {
+      method: "POST",
+      body: { messaging_product: "whatsapp", recipient_type: "individual", to: num, type: "template",
+        template: { name: t.name, language: { code: "en" }, components: [{ type: "body", parameters: params.map((x) => ({ type: "text", text: String(x || "").replace(/\s+/g, " ").trim().slice(0, 300) || "not given" })) }] } },
+    });
+    id = data?.messages?.[0]?.id || `local-${Date.now()}`;
+  }
+  await storeOut(num, id, open ? "text" : "template", text);
+  return id;
+}
+
+// Big orders and contractors: when "our Sales Manager will contact you" goes to a client,
+// the Sales Manager (Julien) gets the client's details on WhatsApp. Once per client per week.
+const SALES_RE = /sales\s*manager/i;
+async function notifySalesManager(waId, sentText, details) {
+  if (!SALES_RE.test(String(sentText || ""))) return null;
+  const map = await getSetting("sales_handovers", {});
+  const done = map && typeof map === "object" ? map : {};
+  if (done[waId] && Date.now() - new Date(done[waId]) < 7 * 24 * 3600 * 1000) return null;
+  const to = await getSetting("sales_manager_number", "23058212040");
+  const { data: c } = await db().from("wa_contacts").select("name,profile_name").eq("wa_id", waId).maybeSingle();
+  const id = await sendTeamMessage(to, "sales", [c?.name || c?.profile_name || "Client", prettyNumber(waId), String(details || "").replace(/\s+/g, " ").slice(0, 300) || "see the chat in the Suite"]);
+  done[waId] = new Date().toISOString();
+  const keys = Object.keys(done);
+  if (keys.length > 500) keys.slice(0, keys.length - 500).forEach((k) => delete done[k]);
+  await setSetting("sales_handovers", done);
+  await logEvent("sales_handover", { wa_id: waId });
   return id;
 }
 
@@ -156,4 +218,4 @@ async function pastRavinMentions(days = 45) {
   return list;
 }
 
-module.exports = { TEMPLATES, tplText, prettyNumber, storeOut, sendLayerTemplate, saveReferral, getReferral, notifyRavin, mentionsRavin, autoRefer, pastRavinMentions };
+module.exports = { TEMPLATES, tplText, prettyNumber, storeOut, sendTeamMessage, notifySalesManager, sendLayerTemplate, saveReferral, getReferral, notifyRavin, mentionsRavin, autoRefer, pastRavinMentions };

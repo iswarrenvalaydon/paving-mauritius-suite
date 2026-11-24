@@ -301,11 +301,14 @@ export default function WhatsAppInbox(){
                   {row(t.referral==="approved","Template: referral message to Ravin",t.error||label(t.referral))}
                   {row(t.payment==="approved","Template: payment update to Ravin",t.error||label(t.payment))}
                   {row(t.missed==="approved","Template: missed-call message to clients",t.error||label(t.missed))}
-                  {(t.referral==="missing"||t.payment==="missing"||t.missed==="missing")&&(
+                  {row(t.sales==="approved","Template: big-order alert to the Sales Manager",t.error||label(t.sales))}
+                  {row(t.breakdownCheck==="approved","Template: \"is it repaired?\" breakdown check",t.error||label(t.breakdownCheck))}
+                  {row(t.breakdownAlert==="approved","Template: breakdown alert to Iswarren",t.error||label(t.breakdownAlert))}
+                  {[t.referral,t.payment,t.missed,t.sales,t.breakdownCheck,t.breakdownAlert].includes("missing")&&(
                     <button onClick={async()=>{ const r=await act("create_referral_template",{},"Templates sent to WhatsApp for approval"); if(r) openSetup(); }} disabled={busy}
                       style={btn(GREEN,"#fff",{marginTop:8,padding:"8px 12px",fontSize:13})}>Create the templates</button>
                   )}
-                  {[t.referral,t.payment,t.missed].some(x=>String(x||"").startsWith("pending"))&&<div style={{fontSize:12,color:MID_GREY,marginTop:4}}>WhatsApp is reviewing them, usually within minutes, sometimes up to a day.</div>}
+                  {[t.referral,t.payment,t.missed,t.sales,t.breakdownCheck,t.breakdownAlert].some(x=>String(x||"").startsWith("pending"))&&<div style={{fontSize:12,color:MID_GREY,marginTop:4}}>WhatsApp is reviewing them, usually within minutes, sometimes up to a day.</div>}
                 </>
               );
             })()}
@@ -318,24 +321,32 @@ export default function WhatsAppInbox(){
                 <div style={{border:`2px solid ${a.enabled?GREEN:"#ccc"}`,borderRadius:8,padding:10,fontSize:12}}>
                   <div style={{fontSize:14,fontWeight:700,color:a.enabled?GREEN:MID_GREY,marginBottom:4}}>{a.enabled?"🟢 ON: simple replies go out by themselves":"⚪ OFF: every suggestion waits for your approval"}</div>
                   <div style={{color:MID_GREY,marginBottom:6}}>
-                    When on, the bot sends greetings, factory hours and location, the price list, photos and simple quotations by itself.
+                    When on, the bot sends greetings, factory hours and location, the price list and photos by itself. Every quotation still waits for your approval, so you choose the bank details each time.
                     It still waits for you on: sketches, photos, files and voice notes from the client; unclear measurements, several areas, unclear product or colour;
                     large orders and contractors; discounts; payments; "which ad?"; anything it isn't sure about; clients the team answered from the phone in the last 2 hours; and at night (11 p.m. to 7 a.m.).
                     Everything it sends shows in the chat, and in the review file as "SENT AUTOMATICALLY".
                   </div>
                   <div style={{display:"flex",gap:8,alignItems:"center",flexWrap:"wrap"}}>
-                    <button onClick={()=>{ if(a.enabled||window.confirm("Switch on automatic sending? Simple replies and quotations will go to clients without your approval.")) save({enabled:!a.enabled},a.enabled?"Automatic sending switched off":"Automatic sending switched on"); }} disabled={busy}
+                    <button onClick={()=>{ if(a.enabled||window.confirm("Switch on automatic sending? Simple replies (greetings, hours, location, price list, photos) will go to clients without your approval. Quotations still wait for you.")) save({enabled:!a.enabled},a.enabled?"Automatic sending switched off":"Automatic sending switched on"); }} disabled={busy}
                       style={btn(a.enabled?"#fff":GREEN,a.enabled?"#B00020":"#fff",a.enabled?{border:"1px solid #B00020",padding:"6px 12px",fontSize:13}:{padding:"6px 12px",fontSize:13})}>{a.enabled?"Switch off":"Switch on"}</button>
-                    <label>Bank details on automatic quotations:{" "}
-                      <select value={a.bank} onChange={e=>save({bank:e.target.value},"Saved")} disabled={busy} style={{fontSize:12,padding:4}}>
-                        <option value="none">None</option>
-                        <option value="sbm">SBM</option>
-                      </select>
-                    </label>
                   </div>
                 </div>
               );
             })()}
+
+            <div style={{marginTop:18,fontWeight:700,color:BLUE,fontSize:14}}>Team alerts</div>
+            <div style={{fontSize:12,color:MID_GREY,marginBottom:6}}>
+              When a client is told "our Sales Manager will contact you", the Sales Manager gets the client's details on WhatsApp.
+              Breakdowns reported by WhatsApp are followed up at 9 a.m. each day until repaired; with no answer by 11, you get a message.
+            </div>
+            {[["sales_manager","Sales Manager (big orders)",setup.sales_manager_number],["owner","Iswarren (breakdown alerts)",setup.owner_number]].map(([k,lbl,val])=>(
+              <div key={k} style={{display:"flex",gap:8,alignItems:"center",marginBottom:6,fontSize:12}}>
+                <span style={{width:170}}>{lbl}</span>
+                <input defaultValue={val?`+${val}`:""} id={`num-${k}`} style={{flex:1,minWidth:0,padding:6,fontSize:13,borderRadius:6,border:"1px solid #ccc"}}/>
+                <button onClick={async()=>{ const v=document.getElementById(`num-${k}`).value; const r=await act("team_numbers",{[k]:v},"Number saved"); if(r) openSetup(); }} disabled={busy}
+                  style={btn(GREEN,"#fff",{padding:"4px 10px",fontSize:12})}>Save</button>
+              </div>
+            ))}
 
             <div style={{marginTop:18,fontWeight:700,color:BLUE,fontSize:14}}>Missed calls</div>
             <div style={{fontSize:12,color:MID_GREY,marginBottom:6}}>

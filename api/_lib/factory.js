@@ -4,7 +4,7 @@
 // short confirmation with the new stock. "Undo" removes the last report.
 const { db, getSetting, setSetting, sendText, logEvent } = require("./common");
 const { mediaBlocks, parseJson } = require("./drafter");
-const { storeOut } = require("./referrals");
+const { storeOut, sendTeamMessage } = require("./referrals");
 
 // Same codes as the factory app (paving-factory/src/App.jsx). Keep both lists in step.
 const PRODUCTS = {
@@ -55,7 +55,27 @@ async function stockOf(codes) {
   return out;
 }
 
-function prompt() {
+// ---- Breakdowns: kept in factory_data "breakdowns" (shown on the factory app's dashboard) ----
+const dayMU = (iso) => new Date(new Date(iso).getTime() + 4 * 3600 * 1000).toISOString().slice(0, 10);
+const shortDay = (iso) => new Date(iso).toLocaleDateString("en-GB", { timeZone: "Indian/Mauritius", day: "numeric", month: "short" });
+function downFor(fromIso, toIso) {
+  const h = Math.max(0, (new Date(toIso) - new Date(fromIso)) / 3600000);
+  if (h >= 24) return `${(h / 24).toFixed(1)} days`;
+  return h >= 1 ? `${Math.floor(h)} h ${Math.round((h % 1) * 60)} min` : `${Math.round(h * 60)} min`;
+}
+async function openBreakdown() {
+  const list = await readKey("breakdowns", []);
+  return [...list].reverse().find((b) => !b.repaired_at) || null;
+}
+
+function prompt(open) {
+  const openLine = open
+    ? `\nOPEN BREAKDOWN: "${open.reason}", reported ${shortDay(open.reported_at)}, not repaired yet. If the message says it is fixed or working again ("repaired", "fixed", "ine arrangé", "li marché", "réparé", "c'est bon"), set "repaired": true. If it says it is still not working, set "still_down" to a short note of what they said.`
+    : "";
+  return `${promptBody()}${openLine}`;
+}
+
+function promptBody() {
   return `You record factory reports for Paving Mauritius Ltd from WhatsApp messages sent by staff (English, French or Mauritian Creole, often short: "2000 pb60 lg", "zordi 1500 cobble DG", "40 ton rock sand Akshay", a photo of a delivery note).
 Today in Mauritius: ${todayMU()}.
 Product codes: ${Object.entries(PRODUCTS).map(([c, n]) => `${c} = ${n}`).join("; ")}.
@@ -67,17 +87,18 @@ Kinds of entries:
 - sales: pieces that LEFT the factory (delivered or collected), with the client if given.
 - rm_purchases: raw material RECEIVED, qty in kg (1 ton = 1000 kg; a 50 kg cement bag = 50 kg), supplier if given.
 Rules: only record what the message clearly states; dates like "yesterday"/"hier"/"yer" become the real date; never guess a product code: if a product, colour or quantity is unclear, record nothing for that line and ask a short question in "question" (in the sender's language). If the message is not a factory report (chat, thanks, other topics), return empty lists and empty question.
-Reply with ONLY JSON: {"production": [{"date": "YYYY-MM-DD", "code": "", "qty": 0}], "sales": [{"date": "", "code": "", "qty": 0, "client": ""}], "rm_purchases": [{"date": "", "code": "", "qty_kg": 0, "supplier": ""}], "undo": false, "question": ""}
+- breakdown: the machine or the factory has stopped because something broke ("breakdown: mixer motor", "machine en panne", "pa pe travay, motor bruler"): its reason in a few words, in English.
+Reply with ONLY JSON: {"production": [{"date": "YYYY-MM-DD", "code": "", "qty": 0}], "sales": [{"date": "", "code": "", "qty": 0, "client": ""}], "rm_purchases": [{"date": "", "code": "", "qty_kg": 0, "supplier": ""}], "breakdown": "", "repaired": false, "still_down": "", "undo": false, "question": ""}
 "undo": true only if the sender asks to cancel/undo their last report ("undo", "annule", "cancel", "sorry wrong").`;
 }
 
-async function askClaude(content) {
+async function askClaude(content, open) {
   const key = process.env.ANTHROPIC_API_KEY;
   if (!key) throw new Error("ANTHROPIC_API_KEY is not set");
   const res = await fetch("https://api.anthropic.com/v1/messages", {
     method: "POST",
     headers: { "x-api-key": key, "anthropic-version": "2023-06-01", "content-type": "application/json" },
-    body: JSON.stringify({ model: process.env.BOT_MODEL || "claude-sonnet-5-5", max_tokens: 1500, system: prompt(), messages: [{ role: "user", content }] }),
+    body: JSON.stringify({ model: process.env.BOT_MODEL || "claude-sonnet-5-5", max_tokens: 1500, system: prompt(open), messages: [{ role: "user", content }] }),
   });
   const data = await res.json();
   if (!res.ok) throw new Error(`Claude: ${data?.error?.message || res.status}`);
@@ -123,8 +144,10 @@ async function handleFactoryReport(waId) {
     ...blocks,
     { type: "text", text: "Write the JSON." },
   ];
-  const r = await askClaude(content);
+  const open = await openBreakdown();
+  const r = await askClaude(content, open);
   if (r.undo) { const t = await undoLast(waId); await reply(waId, t); return { undo: true }; }
+  const notes = await breakdownNotes(waId, r, open);
 
   const batch = `wa-${waId}-${Date.now()}`;
   const by = `whatsapp:${waId}`;
@@ -137,8 +160,9 @@ async function handleFactoryReport(waId) {
     .filter((e) => RAW[e.code] && num(e.qty_kg) > 0).map((e, i) => stamp({ date: validDate(e.date), code: e.code, qty: num(e.qty_kg), unit: "kg", supplier: String(e.supplier || "").slice(0, 80) }, 200 + i));
 
   if (!production.length && !sales.length && !rm.length) {
-    if (r.question) await reply(waId, String(r.question).slice(0, 500));
-    return { recorded: 0 };
+    const t = [...notes, r.question ? String(r.question).slice(0, 500) : ""].filter(Boolean).join("\n\n");
+    if (t) await reply(waId, t);
+    return { recorded: 0, breakdown: notes.length > 0 };
   }
   if (production.length) await writeKey("productionLog", [...await readKey("productionLog", []), ...production], by);
   if (sales.length) await writeKey("salesLog", [...await readKey("salesLog", []), ...sales], by);
@@ -153,6 +177,7 @@ async function handleFactoryReport(waId) {
   for (const e of sales) lines.push(`🚚 Out ${fmtN(e.qty)} ${PRODUCTS[e.code]}${e.client ? ` – ${e.client}` : ""} (${e.date})`);
   for (const e of rm) lines.push(`📦 Received ${fmtN(e.qty / 1000)} t ${RAW[e.code]}${e.supplier ? ` from ${e.supplier}` : ""} (${e.date})`);
   if (codes.length) lines.push("", "Stock now:", ...codes.map((c) => `• ${PRODUCTS[c]}: ${fmtN(stock[c])}`));
+  if (notes.length) lines.push("", ...notes);
   if (r.question) lines.push("", String(r.question).slice(0, 300));
   lines.push("", 'Wrong? Reply "undo".');
   await reply(waId, lines.join("\n"));
@@ -160,4 +185,69 @@ async function handleFactoryReport(waId) {
   return { recorded: production.length + sales.length + rm.length };
 }
 
-module.exports = { handleFactoryReport, PRODUCTS, RAW };
+// A breakdown reported, repaired or still down: update the list and say what was recorded.
+async function breakdownNotes(waId, r, open) {
+  const by = `whatsapp:${waId}`;
+  const now = new Date().toISOString();
+  const list = await readKey("breakdowns", []);
+  const cur = open && list.find((b) => b.id === open.id);
+  const notes = [];
+  if (r.repaired && cur) {
+    cur.repaired_at = now;
+    cur.repaired_by = waId;
+    notes.push(`✅ Repaired: ${cur.reason}. The factory was down ${downFor(cur.reported_at, now)}.`);
+  } else if (r.still_down && cur) {
+    cur.updates = [...(cur.updates || []), { at: now, by: waId, note: String(r.still_down).slice(0, 200) }];
+    notes.push(`🛠 Noted, still down: ${cur.reason}. I'll ask again tomorrow at 9. Reply "repaired" when it's fixed.`);
+  }
+  const reason = String(r.breakdown || "").trim().slice(0, 120);
+  if (reason && !(cur && !cur.repaired_at)) {
+    list.push({ id: `bd-${Date.now()}`, reason, reported_at: now, reported_by: waId, checks: [], updates: [] });
+    notes.push(`🛠 Breakdown recorded: ${reason}. If it isn't marked as repaired, I'll ask tomorrow at 9. Reply "repaired" when it's fixed.`);
+  }
+  if (notes.length) {
+    await writeKey("breakdowns", list.slice(-100), by);
+    await logEvent("factory_breakdown", { wa_id: waId, notes });
+  }
+  return notes;
+}
+
+// Daily check, run by the scheduler at 9:00 (ask) and 11:00 (tell Iswarren) Mauritius time.
+// Safe to run more than once: each step happens once per breakdown per day.
+async function breakdownCheck(step, now = new Date()) {
+  const today = dayMU(now.toISOString());
+  const list = await readKey("breakdowns", []);
+  const done = [];
+  for (const b of list) {
+    if (b.repaired_at || dayMU(b.reported_at) === today) continue; // reported today: wait until tomorrow
+    b.checks = Array.isArray(b.checks) ? b.checks : [];
+    let check = b.checks.find((c) => c.date === today);
+    if (step === "ask") {
+      const answered = (b.updates || []).some((u) => dayMU(u.at) === today);
+      if (check || answered) continue;
+      const to = b.reported_by || (await getSetting("sales_manager_number", "23058212040"));
+      try {
+        await sendTeamMessage(to, "breakdownCheck", [shortDay(b.reported_at), b.reason]);
+        b.checks.push({ date: today, asked_at: now.toISOString(), to });
+        done.push({ id: b.id, asked: to });
+      } catch (e) { await logEvent("breakdown_check_failed", { id: b.id, message: String(e.message || e) }); }
+    } else if (step === "alert") {
+      if (!check || check.alerted) continue;
+      // Any message from the person asked since the question counts as an answer.
+      const { data: replies } = await db().from("wa_messages").select("id").eq("wa_id", check.to).eq("direction", "in").gte("sent_at", check.asked_at).limit(1);
+      const answered = (replies && replies.length) || (b.updates || []).some((u) => u.at >= check.asked_at);
+      if (answered) continue;
+      const owner = await getSetting("owner_number", "23057396517");
+      const { data: c } = await db().from("wa_contacts").select("name,profile_name").eq("wa_id", check.to).maybeSingle();
+      try {
+        await sendTeamMessage(owner, "breakdownAlert", [shortDay(b.reported_at), b.reason, c?.name || c?.profile_name || `+${check.to}`]);
+        check.alerted = now.toISOString();
+        done.push({ id: b.id, alerted: owner });
+      } catch (e) { await logEvent("breakdown_alert_failed", { id: b.id, message: String(e.message || e) }); }
+    }
+  }
+  if (done.length) await writeKey("breakdowns", list, "hey-paving");
+  return done;
+}
+
+module.exports = { handleFactoryReport, breakdownCheck, breakdownNotes, PRODUCTS, RAW };

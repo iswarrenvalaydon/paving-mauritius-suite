@@ -5,7 +5,7 @@ const { draftReply, draftRow } = require("./_lib/drafter");
 const { autoSettings } = require("./_lib/autosend");
 const { getAds, describeAd, deleteAd, pickedAds, pickAd, resolveAd } = require("./_lib/ads");
 const { albums, addPhoto, deletePhoto, getPhotos, albumPhotos, knownAlbums } = require("./_lib/photos");
-const { TEMPLATES, tplText, prettyNumber, storeOut, sendLayerTemplate, getReferral, notifyRavin, mentionsRavin, autoRefer, pastRavinMentions } = require("./_lib/referrals");
+const { TEMPLATES, tplText, prettyNumber, storeOut, notifySalesManager, sendLayerTemplate, getReferral, notifyRavin, mentionsRavin, autoRefer, pastRavinMentions } = require("./_lib/referrals");
 
 const digits = (s) => String(s || "").replace(/\D/g, "");
 const sleep = (ms) => new Promise((r) => setTimeout(r, ms));
@@ -275,6 +275,8 @@ async function send(waId, body, draftId, photosWanted) {
       try { referralSent = Boolean(await autoRefer(waId, "suite")); }
       catch (e) { warning = `The client got Ravin's number, but Ravin couldn't be told: ${String(e.message || e)}`; }
     }
+    try { await notifySalesManager(waId, parts.join("\n"), draft?.team_note); }
+    catch (e) { warning = [warning, `The Sales Manager couldn't be told on WhatsApp: ${String(e.message || e)}`].filter(Boolean).join(" "); await logEvent("sales_handover_failed", { wa_id: waId, message: String(e.message || e) }); }
     const now = new Date().toISOString();
     const sentText = parts.join("\n---\n");
     await db().from("wa_contacts").update({ last_message_at: now, unread: 0 }).eq("wa_id", waId);
@@ -387,6 +389,8 @@ async function sendPdf(waId, { filename, data, caption, draftId, followup, quote
       try { await notifyRavin(waId, draft.quote.referral); referralSent = true; }
       catch (e) { warning = `Ravin couldn't be told: ${String(e.message || e)}`; }
     }
+    try { await notifySalesManager(waId, [text, ...after].join("\n"), draft?.team_note); }
+    catch (e) { warning = [warning, `The Sales Manager couldn't be told on WhatsApp: ${String(e.message || e)}`].filter(Boolean).join(" "); }
     const now = new Date().toISOString();
     await db().from("wa_contacts").update({ last_message_at: now, unread: 0 }).eq("wa_id", waId);
     await db().from("wa_drafts").update({ status: "superseded", decided_at: now }).eq("wa_id", waId).eq("status", "pending").neq("id", draftId || 0);
@@ -422,6 +426,8 @@ async function status(req) {
     out.ads = Object.entries(await getAds()).map(([key, a]) => ({ key, ...a })).sort((a, b) => String(b.first_seen || "").localeCompare(String(a.first_seen || "")));
     out.ravin_number = await getSetting("ravin_number", "");
     out.auto_send = await autoSettings();
+    out.sales_manager_number = await getSetting("sales_manager_number", "23058212040");
+    out.owner_number = await getSetting("owner_number", "23057396517");
     out.missed_call_url = `${siteUrl(req)}/api/missed-call?token=${missedCallToken()}&number=`;
     out.tables = true;
   } catch (err) { out.tables = false; out.table_error = String(err.message || err); }
@@ -617,6 +623,13 @@ module.exports = async function handler(req, res) {
         await setSetting("auto_send", next);
         await logEvent("auto_send_setting", next);
         return res.json({ ok: true, auto_send: await autoSettings() });
+      }
+      case "team_numbers": {
+        // Who gets the "Sales Manager" alerts and the breakdown alerts.
+        const n = (v) => { let d = digits(v); if (d.length === 8) d = `230${d}`; return d; };
+        if (req.body.sales_manager !== undefined) { const d = n(req.body.sales_manager); if (d.length < 8) return res.status(400).json({ error: "Check the Sales Manager's number" }); await setSetting("sales_manager_number", d); }
+        if (req.body.owner !== undefined) { const d = n(req.body.owner); if (d.length < 8) return res.status(400).json({ error: "Check your number" }); await setSetting("owner_number", d); }
+        return res.json({ ok: true });
       }
       case "pick_ad": {
         // The team says which ad a client came from (or "none"); the bot then writes the reply.
