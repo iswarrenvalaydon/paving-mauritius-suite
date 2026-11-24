@@ -101,18 +101,25 @@ async function templateStatuses() {
 async function createMissingTemplates() {
   const status = await templateStatuses();
   const created = [];
+  const failed = [];
   for (const [key, t] of Object.entries(TEMPLATES)) {
     if (status[key] !== "missing") continue;
-    await d360("/v1/configs/templates", {
-      method: "POST",
-      body: {
-        name: t.name, category: "UTILITY", language: "en", allow_category_change: true,
-        components: [{ type: "BODY", text: t.body, ...(t.example ? { example: { body_text: [t.example] } } : {}) }],
-      },
-    });
-    created.push(t.name);
+    // One refused template must not stop the others.
+    try {
+      await d360("/v1/configs/templates", {
+        method: "POST",
+        body: {
+          name: t.name, category: "UTILITY", language: "en", allow_category_change: true,
+          components: [{ type: "BODY", text: t.body, ...(t.example ? { example: { body_text: [t.example] } } : {}) }],
+        },
+      });
+      created.push(t.name);
+    } catch (e) {
+      failed.push(`${t.name}: ${String(e.message || e).slice(0, 200)}`);
+      await logEvent("template_create_failed", { name: t.name, message: String(e.message || e), data: e.data || null });
+    }
   }
-  return created;
+  return { created, failed };
 }
 
 
@@ -658,7 +665,7 @@ module.exports = async function handler(req, res) {
         await db().from("wa_contacts").upsert({ wa_id: full, name: "Ravin (layer)", is_staff: true }, { onConflict: "wa_id" });
         return res.json({ ok: true, ravin_number: full });
       }
-      case "create_referral_template": return res.json({ ok: true, created: await createMissingTemplates() });
+      case "create_referral_template": { const r = await createMissingTemplates(); return res.json({ ok: true, ...r }); }
       case "delete_example": {
         const list = await getSetting("examples", []);
         await setSetting("examples", (Array.isArray(list) ? list : []).filter((e) => e.at !== String(value || "")));

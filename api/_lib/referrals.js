@@ -15,7 +15,7 @@ const TEMPLATES = {
   },
   sales: {
     name: "sales_manager_lead",
-    body: "Hey Paving: a client needs our Sales Manager to contact them.\nClient: {{1}}\nNumber: {{2}}\nDetails: {{3}}",
+    body: "Hey Paving: a client needs our Sales Manager to contact them.\nClient: {{1}}\nNumber: {{2}}\nDetails: {{3}}\nPlease contact them soon. Thank you!",
     example: ["Jsd Battery Centre Ltd", "+230 5767 5024", "About 190 m2, slabs 600x300 Light Grey + 300x300 Dark Grey"],
   },
   breakdownCheck: {

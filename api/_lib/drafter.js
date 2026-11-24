@@ -37,8 +37,17 @@ Then fill "referral" with what you know about the client: client_name, location 
 `;
 }
 
+// The fixed instructions (rulebook, rules, examples) are the same for every client, so they are
+// cached by Claude between replies (prompt caching); only the time and the client change.
 function systemPrompt(rulebook, contact, examples, ravin) {
   const now = fmtTime(new Date().toISOString());
+  return [
+    { type: "text", text: fixedPrompt(rulebook, examples, ravin), cache_control: { type: "ephemeral" } },
+    { type: "text", text: `Current time in Mauritius: ${now}.\nClient: ${contact?.name || contact?.profile_name || "unknown"} (+${contact?.wa_id || ""}).` },
+  ];
+}
+
+function fixedPrompt(rulebook, examples, ravin) {
   return `You are the WhatsApp assistant of Paving Mauritius Ltd, writing replies to clients on the business number 5725 4201.
 Every reply you write is a DRAFT: a team member reads it and approves, edits or discards it before the client sees anything.
 
@@ -96,8 +105,6 @@ First contact: the very first time a client talks to us, end that first conversa
 
 Price list: when the client asks for the price list, set "attach" to "price_list" and send one short line such as "Here is our price list." The PDF goes with it.
 ${referralText(ravin)}${examplesText(examples)}
-Current time in Mauritius: ${now}.
-Client: ${contact?.name || contact?.profile_name || "unknown"} (+${contact?.wa_id || ""}).
 
 Reply with ONLY a JSON object, no other text:
 {"messages": ["<short message>", "<short message>"], "reply_to": [<client message number this message answers, e.g. 3, or null>, ...], "needs_team": true|false, "team_note": "<short note or empty>", "attach": null | "price_list", "photos": [<album names to send, or empty>], "photo_mode": "album" | "designs", "photos_after": "<message sent after the photos, or empty>",

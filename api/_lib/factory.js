@@ -77,7 +77,6 @@ function prompt(open) {
 
 function promptBody() {
   return `You record factory reports for Paving Mauritius Ltd from WhatsApp messages sent by staff (English, French or Mauritian Creole, often short: "2000 pb60 lg", "zordi 1500 cobble DG", "40 ton rock sand Akshay", a photo of a delivery note).
-Today in Mauritius: ${todayMU()}.
 Product codes: ${Object.entries(PRODUCTS).map(([c, n]) => `${c} = ${n}`).join("; ")}.
 Raw material names they use: "rock sand"/"0/4"/"zero four"/"roxanne" = RS04; "chipping"/"4/6"/"four six"/"gravier" = AGG38 (we no longer use 3/8); "cement"/"ciment" = OPC (the cement truck fills the silo; a full silo load is often given in tons).
 Colours: LG = Light Grey, DG = Dark Grey (black/gris foncé), RD = Red, TC = Terracotta, BN = Brown. "Pavé"/"PB"/"brick" = paving brick; "slab"/"dalle"; "cobble"; "evergreen"/"grass".
@@ -98,7 +97,7 @@ async function askClaude(content, open) {
   const res = await fetch("https://api.anthropic.com/v1/messages", {
     method: "POST",
     headers: { "x-api-key": key, "anthropic-version": "2023-06-01", "content-type": "application/json" },
-    body: JSON.stringify({ model: process.env.BOT_MODEL || "claude-sonnet-5-5", max_tokens: 1500, system: prompt(open), messages: [{ role: "user", content }] }),
+    body: JSON.stringify({ model: process.env.BOT_MODEL || "claude-sonnet-5-5", max_tokens: 1500, system: [{ type: "text", text: promptBody(), cache_control: { type: "ephemeral" } }, { type: "text", text: `Today in Mauritius: ${todayMU()}.${prompt(open).slice(promptBody().length)}` }], messages: [{ role: "user", content }] }),
   });
   const data = await res.json();
   if (!res.ok) throw new Error(`Claude: ${data?.error?.message || res.status}`);

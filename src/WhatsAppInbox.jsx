@@ -305,7 +305,7 @@ export default function WhatsAppInbox(){
                   {row(t.breakdownCheck==="approved","Template: \"is it repaired?\" breakdown check",t.error||label(t.breakdownCheck))}
                   {row(t.breakdownAlert==="approved","Template: breakdown alert to Iswarren",t.error||label(t.breakdownAlert))}
                   {[t.referral,t.payment,t.missed,t.sales,t.breakdownCheck,t.breakdownAlert].includes("missing")&&(
-                    <button onClick={async()=>{ const r=await act("create_referral_template",{},"Templates sent to WhatsApp for approval"); if(r) openSetup(); }} disabled={busy}
+                    <button onClick={async()=>{ const r=await act("create_referral_template",{},""); if(r){ if(r.failed&&r.failed.length) setError(`WhatsApp refused: ${r.failed.join(" · ")}`); else setInfo("Templates sent to WhatsApp for approval"); openSetup(); } }} disabled={busy}
                       style={btn(GREEN,"#fff",{marginTop:8,padding:"8px 12px",fontSize:13})}>Create the templates</button>
                   )}
                   {[t.referral,t.payment,t.missed,t.sales,t.breakdownCheck,t.breakdownAlert].some(x=>String(x||"").startsWith("pending"))&&<div style={{fontSize:12,color:MID_GREY,marginTop:4}}>WhatsApp is reviewing them, usually within minutes, sometimes up to a day.</div>}
