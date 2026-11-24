@@ -335,4 +335,4 @@ function cleanQuote(q) {
   };
 }
 
-module.exports = { draftReply, cleanQuote, draftRow, hasContent, MESSAGE_BREAK };
+module.exports = { draftReply, cleanQuote, draftRow, hasContent, MESSAGE_BREAK, mediaBlocks, parseJson };

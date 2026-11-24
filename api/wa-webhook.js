@@ -5,6 +5,7 @@ const { db, hookToken, safeEqual, getSetting, logEvent, insertDraft, sendText } 
 const { draftReply, draftRow, hasContent } = require("./_lib/drafter");
 const { adText, noteAd } = require("./_lib/ads");
 const { mentionsRavin, autoRefer } = require("./_lib/referrals");
+const { handleFactoryReport } = require("./_lib/factory");
 
 let waitUntil = null;
 try { ({ waitUntil } = require("@vercel/functions")); } catch { waitUntil = null; }
@@ -97,6 +98,18 @@ async function supersedeDrafts(waId) {
 }
 
 // After a short pause, write a draft for the latest client message if nobody has answered yet.
+// A factory report from Julien or Kailash: wait for any follow-up messages, then record it.
+async function factoryFor(waId, triggerId) {
+  try {
+    await sleep(DEBOUNCE_MS);
+    const { data } = await db().from("wa_messages").select("id").eq("wa_id", waId).eq("direction", "in").order("sent_at", { ascending: false }).limit(1);
+    if (!data?.[0] || data[0].id !== triggerId) return; // a newer message will handle it
+    await handleFactoryReport(waId);
+  } catch (err) {
+    await logEvent("factory_error", { wa_id: waId, message: String(err?.message || err) });
+  }
+}
+
 async function draftFor(waId, triggerId) {
   try {
     await sleep(DEBOUNCE_MS);
@@ -120,10 +133,12 @@ async function draftFor(waId, triggerId) {
 
 async function handle(body) {
   const changes = collectChanges(body);
-  if (!changes.length) { await logEvent("unknown", body); return { toDraft: [], resendLater: [], referLater: [] }; }
+  if (!changes.length) { await logEvent("unknown", body); return { toDraft: [], resendLater: [], referLater: [], factoryLater: [] }; }
 
-  const [botEnabled, staffList] = await Promise.all([getSetting("bot_enabled", true), getSetting("staff_numbers", [])]);
+  const [botEnabled, staffList, reporterList] = await Promise.all([getSetting("bot_enabled", true), getSetting("staff_numbers", []), getSetting("factory_reporters", [])]);
   const staff = new Set((Array.isArray(staffList) ? staffList : []).map(digits));
+  const reporters = new Set((Array.isArray(reporterList) ? reporterList : []).map(digits));
+  const factoryLater = [];
   const toDraft = [];
   const resendLater = [];
   const referLater = [];
@@ -156,6 +171,7 @@ async function handle(body) {
           const id = digits(m.from);
           const { data: c } = await db().from("wa_contacts").select("unread,bot_paused,is_staff").eq("wa_id", id).maybeSingle();
           await db().from("wa_contacts").update({ unread: (c?.unread || 0) + 1 }).eq("wa_id", id);
+          if (reporters.has(id)) { if (m.type !== "reaction") factoryLater.push([id, m.id]); continue; }
           if (botEnabled !== false && !c?.bot_paused && !c?.is_staff && !staff.has(id) && m.type !== "reaction") toDraft.push([id, m.id]);
         }
       }
@@ -218,7 +234,7 @@ async function handle(body) {
       await logEvent(field || "other", value);
     }
   }
-  return { toDraft, resendLater, referLater };
+  return { toDraft, resendLater, referLater, factoryLater };
 }
 
 // A message from the Suite that WhatsApp dropped for sending too fast: send it again once, 8 s later.
@@ -245,8 +261,9 @@ module.exports = async function handler(req, res) {
   let toDraft = [];
   let resendLater = [];
   let referLater = [];
+  let factoryLater = [];
   try {
-    ({ toDraft, resendLater, referLater = [] } = await handle(req.body));
+    ({ toDraft, resendLater, referLater = [], factoryLater = [] } = await handle(req.body));
   } catch (err) {
     await logEvent("webhook_error", { message: String(err?.message || err), body: req.body });
   }
@@ -255,6 +272,7 @@ module.exports = async function handler(req, res) {
     ...toDraft.map(([waId, msgId]) => draftFor(waId, msgId)),
     ...resendLater.map((id) => resendFailed(id)),
     ...[...new Set(referLater)].map((id) => autoRefer(id, "phone").catch(() => null)),
+    ...factoryLater.map(([waId, msgId]) => factoryFor(waId, msgId)),
   ]);
   if (waitUntil) {
     waitUntil(jobs);

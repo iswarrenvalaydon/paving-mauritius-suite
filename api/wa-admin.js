@@ -492,6 +492,16 @@ module.exports = async function handler(req, res) {
         await db().from("wa_contacts").update({ last_message_at: new Date().toISOString(), unread: 0 }).eq("wa_id", waId);
         return res.json({ ok: true, ids });
       }
+      case "factory_reporters": {
+        if (Array.isArray(req.body.numbers)) {
+          const list = [...new Set(req.body.numbers.map((n) => { let d = digits(n); if (d.length === 8) d = `230${d}`; return d; }).filter((d) => d.length >= 10))];
+          await setSetting("factory_reporters", list);
+          const staff = (await getSetting("staff_numbers", [])).map(digits);
+          await setSetting("staff_numbers", [...new Set([...staff, ...list])]); // the bot never drafts client replies to them
+          for (const id of list) await db().from("wa_contacts").upsert({ wa_id: id, is_staff: true }, { onConflict: "wa_id" });
+        }
+        return res.json({ numbers: await getSetting("factory_reporters", []) });
+      }
       case "past_referrals": return res.json({ clients: await pastRavinMentions() });
       case "refer_ravin": {
         const referral = await autoRefer(waId, "check");

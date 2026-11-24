@@ -358,6 +358,7 @@ export default function WhatsAppInbox(){
             <div style={{marginTop:16,fontSize:12,color:MID_GREY}}>
               Staff numbers (no bot replies): {(setup.staff_numbers||[]).map(n=>"+"+n).join(", ")||"none"}
             </div>
+            <FactoryReporters api={api} act={act} busy={busy}/>
             <TeamLogins api={api} act={act} busy={busy}/>
           </>
         )}
@@ -639,6 +640,36 @@ function TeamLogins({api,act,busy}){
           style={{flex:1,minWidth:150,padding:8,fontSize:13,borderRadius:6,border:"1px solid #ccc"}}/>
         <button onClick={async()=>{ const r=await act("create_login",{email,password:pw},"Login saved"); if(r){ setEmail(""); setPw(""); load(); } }} disabled={busy||!email.trim()||pw.length<8}
           style={btn(GREEN,"#fff",{padding:"8px 12px",fontSize:13})}>Add / change password</button>
+      </div>
+    </div>
+  );
+}
+
+// Who can send factory reports (production, deliveries out, raw material in) to the business WhatsApp.
+function FactoryReporters({api,act,busy}){
+  const [numbers,setNumbers]=useState(null);
+  const [input,setInput]=useState("");
+  const load=useCallback(async()=>{ try{ const r=await api("factory_reporters"); setNumbers(r.numbers||[]); }catch{ setNumbers([]); } },[api]);
+  useEffect(()=>{ load(); },[load]);
+  async function saveList(list){ const r=await act("factory_reporters",{numbers:list},"Saved"); if(r) setNumbers(r.numbers||[]); }
+  return(
+    <div>
+      <div style={{marginTop:18,fontWeight:700,color:BLUE,fontSize:14}}>Factory reports by WhatsApp</div>
+      <div style={{fontSize:12,color:MID_GREY,marginBottom:6}}>
+        These people (e.g. Julien, Kailash) send the business WhatsApp what was made, what left the factory and raw material received, like "2000 PB60 LG" or "40 ton rock sand Akshay", or a photo of the delivery note. It goes straight into the factory app and they get a confirmation with the new stock. "undo" cancels their last report.
+      </div>
+      {(numbers||[]).map(n=>(
+        <div key={n} style={{display:"flex",alignItems:"center",gap:8,fontSize:13,padding:"4px 0"}}>
+          <span style={{flex:1}}>📲 +{n}</span>
+          <button onClick={()=>saveList(numbers.filter(x=>x!==n))} disabled={busy}
+            style={btn("#fff","#B00020",{border:"1px solid #B00020",padding:"3px 8px",fontSize:12})}>Remove</button>
+        </div>
+      ))}
+      <div style={{display:"flex",gap:6,marginTop:6}}>
+        <input value={input} onChange={e=>setInput(e.target.value)} placeholder="Number, e.g. 5xxx xxxx" inputMode="tel"
+          style={{flex:1,minWidth:150,padding:8,fontSize:13,borderRadius:6,border:"1px solid #ccc"}}/>
+        <button onClick={async()=>{ await saveList([...(numbers||[]),input]); setInput(""); }} disabled={busy||input.replace(/\D/g,"").length<8}
+          style={btn(GREEN,"#fff",{padding:"8px 12px",fontSize:13})}>Add</button>
       </div>
     </div>
   );
