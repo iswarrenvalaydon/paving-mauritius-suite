@@ -275,7 +275,9 @@ async function send(waId, body, draftId, photosWanted) {
     await db().from("wa_contacts").update({ last_message_at: now, unread: 0 }).eq("wa_id", waId);
     await db().from("wa_drafts").update({ status: "superseded", decided_at: now }).eq("wa_id", waId).eq("status", "pending").neq("id", draftId || 0);
     if (draftId) {
-      await db().from("wa_drafts").update({ status: "sent", body: sentText, decided_at: now }).eq("id", draftId);
+      // Keep the bot's own wording next to what was really sent (for the review export).
+      const keep = draft && !draft.quote?.original ? { quote: { ...(draft.quote || {}), original: draft.body } } : {};
+      await db().from("wa_drafts").update({ status: "sent", body: sentText, decided_at: now, ...keep }).eq("id", draftId);
       if (!draft?.quote?.template) { try { await learnFrom(waId, suggested, sentText); } catch { /* learning must never block sending */ } }
     }
     return { ok: true, ids, warning, referral_sent: referralSent };
@@ -351,7 +353,7 @@ async function sendPdf(waId, { filename, data, caption, draftId, followup, quote
     const now = new Date().toISOString();
     await db().from("wa_contacts").update({ last_message_at: now, unread: 0 }).eq("wa_id", waId);
     await db().from("wa_drafts").update({ status: "superseded", decided_at: now }).eq("wa_id", waId).eq("status", "pending").neq("id", draftId || 0);
-    if (draftId) await db().from("wa_drafts").update({ status: "sent", body: [text, ...after].join("\n---\n"), decided_at: now }).eq("id", draftId);
+    if (draftId) await db().from("wa_drafts").update({ status: "sent", body: [text, ...after].join("\n---\n"), decided_at: now, ...(draft && !draft.quote?.original ? { quote: { ...(draft.quote || {}), original: draft.body } } : {}) }).eq("id", draftId);
     return { ok: true, id, warning, referral_sent: referralSent };
   } catch (err) {
     const late = JSON.stringify(err.data || "").includes("131047");
@@ -451,6 +453,47 @@ async function removeLogin(rawEmail, me) {
   return { ok: true };
 }
 
+// A plain-text record of the last days' client chats: every message, and for each bot suggestion
+// what the bot wrote, what happened to it (sent / changed / discarded) and its note to the team.
+async function reviewExport(days) {
+  const since = new Date(Date.now() - Math.min(days, 31) * 86400000).toISOString();
+  const [{ data: msgs }, { data: drafts }, { data: contacts }] = await Promise.all([
+    db().from("wa_messages").select("wa_id,direction,source,type,body,sent_at").gte("sent_at", since).order("sent_at", { ascending: true }).limit(5000),
+    db().from("wa_drafts").select("wa_id,body,team_note,needs_team,status,quote,created_at,decided_at").gte("created_at", since).order("created_at", { ascending: true }).limit(2000),
+    db().from("wa_contacts").select("wa_id,name,profile_name,is_staff"),
+  ]);
+  const people = new Map((contacts || []).map((c) => [c.wa_id, c]));
+  const staff = new Set([...(await getSetting("staff_numbers", [])).map(digits), ...(await getSetting("factory_reporters", [])).map(digits)]);
+  const t = (iso) => new Date(iso).toLocaleString("en-GB", { timeZone: "Indian/Mauritius", day: "2-digit", month: "short", hour: "2-digit", minute: "2-digit" });
+  const chats = new Map();
+  for (const m of msgs || []) {
+    if (people.get(m.wa_id)?.is_staff || staff.has(m.wa_id)) continue;
+    if (!chats.has(m.wa_id)) chats.set(m.wa_id, []);
+    const who = m.direction === "in" ? "CLIENT" : m.source === "phone" ? "TEAM (phone)" : "SENT (Suite)";
+    chats.get(m.wa_id).push({ at: m.sent_at, line: `[${t(m.sent_at)}] ${who}: ${String(m.body || `[${m.type}]`).replace(/\n---\n/g, " | ")}` });
+  }
+  for (const d of drafts || []) {
+    if (!chats.has(d.wa_id)) continue;
+    const original = d.quote?.original || (d.status === "sent" ? "" : d.body);
+    const changed = d.status === "sent" && d.quote?.original && d.quote.original.trim() !== String(d.body || "").trim();
+    const fate = d.status === "sent" ? (d.quote?.original ? (changed ? "SENT AFTER CHANGES" : "SENT AS WRITTEN") : "SENT") : d.status.toUpperCase();
+    const lines = [`[${t(d.created_at)}] BOT SUGGESTION → ${fate}${d.needs_team ? " (flagged for the team)" : ""}`];
+    if (original) lines.push(`    bot wrote: ${original.replace(/\n---\n/g, " | ")}`);
+    if (changed) lines.push(`    team sent: ${String(d.body).replace(/\n---\n/g, " | ")}`);
+    if (d.team_note) lines.push(`    note to team: ${d.team_note}`);
+    if (Array.isArray(d.quote?.quotes) && d.quote.quotes.length) lines.push(`    quotations: ${d.quote.quotes.map((q) => q.summary || (q.items || []).map((i) => `${i.qty} × ${i.desc}`).join(" + ")).join(" / ")}`);
+    chats.get(d.wa_id).push({ at: d.created_at, line: lines.join("\n") });
+  }
+  const out = [`Paving Mauritius – WhatsApp chats for review, last ${days} days (exported ${t(new Date().toISOString())})`, ""];
+  for (const [waId, items] of chats) {
+    const c = people.get(waId);
+    out.push(`==== ${c?.name || c?.profile_name || "Client"} (+${waId}) ====`);
+    items.sort((a, b) => String(a.at).localeCompare(String(b.at))).forEach((i) => out.push(i.line));
+    out.push("");
+  }
+  return out.join("\n");
+}
+
 module.exports = async function handler(req, res) {
   if (req.method !== "POST") return res.status(405).end();
   const who = await caller(req).catch(() => null);
@@ -496,6 +539,7 @@ module.exports = async function handler(req, res) {
         }
         return res.json({ numbers: await getSetting("factory_reporters", []) });
       }
+      case "review_export": return res.json({ text: await reviewExport(Number(value) || 7) });
       case "past_referrals": return res.json({ clients: await pastRavinMentions() });
       case "refer_ravin": {
         const referral = await autoRefer(waId, "check");

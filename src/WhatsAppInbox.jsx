@@ -358,6 +358,11 @@ export default function WhatsAppInbox(){
             <div style={{marginTop:16,fontSize:12,color:MID_GREY}}>
               Staff numbers (no bot replies): {(setup.staff_numbers||[]).map(n=>"+"+n).join(", ")||"none"}
             </div>
+            <div style={{marginTop:18,fontWeight:700,color:BLUE,fontSize:14}}>Review the bot</div>
+            <div style={{fontSize:12,color:MID_GREY,marginBottom:6}}>Downloads the last 7 days of client chats with every bot suggestion: what it wrote, whether you sent it as written, changed it or discarded it, and its notes. Send the file to Claude for a review.</div>
+            <button onClick={async()=>{ const r=await act("review_export",{value:7},"Review file downloaded"); if(r){ const url=URL.createObjectURL(new Blob([r.text],{type:"text/plain"})); const a=document.createElement("a"); a.href=url; a.download=`bot-review-${new Date().toISOString().slice(0,10)}.txt`; a.click(); URL.revokeObjectURL(url); } }} disabled={busy}
+              style={btn("#fff",BLUE,{border:`1px solid ${BLUE}`,padding:"6px 10px",fontSize:12})}>📋 Download chats for review</button>
+
             <FactoryReporters api={api} act={act} busy={busy}/>
             <TeamLogins api={api} act={act} busy={busy}/>
           </>
