@@ -30,6 +30,10 @@ async function handleMissedCall({ number, kind, name }) {
 
   const now = new Date();
   const label = kind === "whatsapp" ? "📞 Missed WhatsApp call" : "📞 Missed phone call";
+  // The phone sometimes reports the same missed call twice: ignore repeats within 3 minutes.
+  const { data: recentCall } = await db().from("wa_messages").select("id").eq("wa_id", waId).eq("type", "call")
+    .gte("sent_at", new Date(now.getTime() - 3 * 60 * 1000).toISOString()).limit(1);
+  if (recentCall && recentCall.length) return { skipped: "same call reported twice" };
   if (!contact) await db().from("wa_contacts").insert({ wa_id: waId, profile_name: String(name || "").trim() || null });
   await db().from("wa_messages").upsert({
     id: `call-${waId}-${now.getTime()}`, wa_id: waId, direction: "in", source: "client", type: "call",
