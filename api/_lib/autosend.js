@@ -2,7 +2,7 @@
 // until the team switches it on, every suggestion waits for approval as before.
 // When on, a suggestion goes out by itself only if nothing in it needs a person (see holdReason).
 // Quotations always wait for approval, so the team chooses the bank details each time.
-const { db, getSetting, logEvent } = require("./common");
+const { db, getSetting, setSetting, logEvent } = require("./common");
 const { findProduct } = require("./products");
 
 const MEDIA = ["image", "document", "audio", "video", "sticker", "unsupported"];
@@ -35,6 +35,16 @@ function hasEstimate(text) {
 }
 
 // Why this suggestion must wait for the team, or null if it can go out by itself.
+async function approvedOrder(waId) {
+  const orders = await getSetting("contact_orders", {});
+  const o = orders && orders[waId];
+  return o && o.approved && (o.bank === "sbm" || o.bank === "none") && Date.now() - new Date(o.at) < 14 * 86400000 ? o : null;
+}
+async function consumeOrder(waId) {
+  const orders = await getSetting("contact_orders", {});
+  if (orders && orders[waId]) { orders[waId].approved = false; await setSetting("contact_orders", orders); }
+}
+
 async function holdReason(waId, row, now = new Date(), opts = {}) {
   if (!row) return "no suggestion";
   if (row.needs_team) return "the bot flagged it for the team";
@@ -43,9 +53,11 @@ async function holdReason(waId, row, now = new Date(), opts = {}) {
   if (x.ask_ad) return "which ad";
   if (x.template) return "missed-call template";
   const quotes = Array.isArray(x.quotes) ? x.quotes : [];
+  // A quotation the owner ordered himself (his command named the product and the bank) needs no extra approval: one quotation only.
+  const order = quotes.length === 1 ? await approvedOrder(waId) : null;
   if (!String(row.body || "").trim() && !quotes.length && !x.attach && !(x.photos || []).length) return "nothing to send";
-  if (quotes.length) return "quotation (approve it and choose the bank details)";
-  if (hasEstimate(row.body)) return "price estimate for the client's area";
+  if (quotes.length && !order) return "quotation (approve it and choose the bank details)";
+  if (!order && hasEstimate(row.body)) return "price estimate for the client's area";
   const h = mauritiusHour(now);
   if (h >= 23 || h < 7) return "night (chat hours end at 11 p.m.)";
   const { data } = await db().from("wa_messages").select("direction,source,type,sent_at").eq("wa_id", waId).order("sent_at", { ascending: false }).limit(60);
@@ -78,7 +90,9 @@ async function autoSend(waId, row, opts = {}) {
   try {
     const quotes = Array.isArray(fresh.quote?.quotes) ? fresh.quote.quotes : [];
     if (quotes.length) {
-      for (let i = 0; i < quotes.length; i += 1) await autoQuote(waId, row.id, quotes[i], i, cfg.bank, row.body);
+      const order = quotes.length === 1 ? await approvedOrder(waId) : null;
+      for (let i = 0; i < quotes.length; i += 1) await autoQuote(waId, row.id, quotes[i], i, order ? order.bank : cfg.bank, row.body);
+      if (order) await consumeOrder(waId); // used once: the next quotation for this client needs approval again
     } else {
       await send(waId, row.body, row.id);
     }

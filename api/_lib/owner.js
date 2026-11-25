@@ -58,7 +58,8 @@ async function parseCommand(text) {
       model: process.env.BOT_MODEL || "claude-sonnet-5-5", max_tokens: 400,
       system: `You read one instruction from the owner of Paving Mauritius Ltd to his WhatsApp bot. It may be typed or transcribed from speech (English, French, rough Mauritian Creole, so numbers and words may be slightly wrong).
 The only command is "contact": open a chat with a client. Examples: "contact 5762 9412", "contact 5762 9412 in French", "contact 57629412 and send a quotation for 20 m² of 600x300 Light Grey", "contacte le 5762 9412 en français, devis 30 m2 pavés".
-Reply with JSON only: {"action":"contact"|"none","number":"the phone number digits as given, no spaces","lang":"fr" if he asks for French or the message itself is in French, else "en","note":"what the bot should prepare for the client after they reply, short, in English, e.g. quotation for 20 m2 of 600x300 Light Grey; empty string if nothing was asked"}.
+Reply with JSON only: {"action":"contact"|"none","number":"the phone number digits as given, no spaces","lang":"fr" if he asks for French or the message itself is in French, else "en","note":"what the bot should prepare for the client after they reply, short, in English, with every detail he gave (product, thickness, colour, size, area in m2), e.g. quotation for 40 m2 of 60mm Light Grey pavers; empty string if nothing was asked","send_quote":true if he asks to send/prepare a quotation, else false,"bank":"sbm" if he says SBM (SBM bank details on the quotation), "none" if he says no bank details, otherwise ""}.
+Example: "contact 5738 7118, send her a quotation for 40 m2 of 60 millimeter light grey paving brick, make the quotation SBM" -> {"action":"contact","number":"57387118","lang":"en","note":"quotation for 40 m2 of 60mm Light Grey pavers","send_quote":true,"bank":"sbm"}.
 If it is not a request to contact someone, or the number is missing, reply {"action":"none"}.`,
       messages: [{ role: "user", content: t }],
     }),
@@ -70,7 +71,8 @@ If it is not a request to contact someone, or the number is missing, reply {"act
     if (j.action !== "contact") return { action: "none" };
     const number = localNumber(j.number);
     if (!number) return { action: "none", problem: "number" };
-    return { action: "contact", number, lang: j.lang === "fr" ? "fr" : "en", note: String(j.note || "").slice(0, 300) };
+    const bank = j.bank === "sbm" ? "sbm" : j.bank === "none" ? "none" : "";
+    return { action: "contact", number, lang: j.lang === "fr" ? "fr" : "en", note: String(j.note || "").slice(0, 300), send_quote: Boolean(j.send_quote), bank };
   } catch {
     const m = FAST.exec(t);
     if (!m) return { action: "none" };
@@ -80,7 +82,7 @@ If it is not a request to contact someone, or the number is missing, reply {"act
 }
 
 // ---- Contacting a client with the Sales Manager message ----
-async function contactClient({ number, lang, note, by }) {
+async function contactClient({ number, lang, note, by, send_quote, bank }) {
   const waId = localNumber(number);
   if (!waId) throw new Error("That number doesn't look right");
   const [staff, ownerNum] = await Promise.all([getSetting("staff_numbers", []), getSetting("owner_number", "23057396517")]);
@@ -103,11 +105,14 @@ async function contactClient({ number, lang, note, by }) {
   await db().from("wa_contacts").update({ last_message_at: new Date().toISOString() }).eq("wa_id", waId);
   if (note) {
     const orders = (await getSetting("contact_orders", {})) || {};
-    orders[waId] = { note, at: new Date().toISOString(), by: by || "" };
+    // "approved": the owner himself ordered the quotation and named the bank details, so it goes out without waiting.
+    // Only the owner's channels (WhatsApp from his number, or his Setup) can set this.
+    const approved = Boolean(send_quote) && (bank === "sbm" || bank === "none");
+    orders[waId] = { note, at: new Date().toISOString(), by: by || "", approved, bank: approved ? bank : "" };
     await setSetting("contact_orders", orders);
   }
-  await logEvent("contact_client", { wa_id: waId, lang, note, by: by || "" });
-  return { wa_id: waId, pretty: prettyNumber(waId), lang, note: note || "" };
+  await logEvent("contact_client", { wa_id: waId, lang, note, by: by || "", send_quote: Boolean(send_quote), bank: bank || "" });
+  return { wa_id: waId, pretty: prettyNumber(waId), lang, note: note || "", direct: Boolean(note) && Boolean(send_quote) && (bank === "sbm" || bank === "none") };
 }
 
 // ---- The owner's WhatsApp messages (typed or voice) ----
@@ -121,7 +126,8 @@ async function reply(waId, text) {
 }
 
 function describe(cmd) {
-  return `contact ${prettyNumber(cmd.number)} in ${cmd.lang === "fr" ? "French" : "English"}${cmd.note ? `, then prepare: ${cmd.note}` : ""}`;
+  const direct = cmd.send_quote && (cmd.bank === "sbm" || cmd.bank === "none");
+  return `contact ${prettyNumber(cmd.number)} in ${cmd.lang === "fr" ? "French" : "English"}${cmd.note ? `, then prepare: ${cmd.note}` : ""}${direct ? `, and send the quotation (${cmd.bank === "sbm" ? "SBM bank details" : "no bank details"}) as soon as they reply, without waiting for approval` : ""}`;
 }
 
 async function handleOwnerMessage(waId, m) {
@@ -133,14 +139,14 @@ async function handleOwnerMessage(waId, m) {
       if (fresh && YES.test(text)) {
         await setSetting("owner_pending", null);
         const r = await contactClient({ ...pending.cmd, by: "owner (WhatsApp)" });
-        return reply(waId, `✅ Done: ${prettyNumber(r.wa_id)} has our first message${r.lang === "fr" ? " (French)" : ""}.${r.note ? ` I'll prepare "${r.note}" when they reply; quotations wait for your approval.` : ""}`);
+        return reply(waId, `✅ Done: ${prettyNumber(r.wa_id)} has our first message${r.lang === "fr" ? " (French)" : ""}.${r.note ? ` I'll prepare "${r.note}" when they reply${r.direct ? ", and send the quotation straight away." : "; quotations wait for your approval."}` : ""}`);
       }
       if (fresh && NO.test(text)) { await setSetting("owner_pending", null); return reply(waId, "Cancelled."); }
       if (!GATE.test(text)) return null;
       const cmd = await parseCommand(text);
       if (cmd.action !== "contact") return cmd.problem === "number" ? reply(waId, "I couldn't read the number. Please check it and send the command again.") : null;
       const r = await contactClient({ ...cmd, by: "owner (WhatsApp)" });
-      return reply(waId, `✅ Done: ${prettyNumber(r.wa_id)} has our first message${r.lang === "fr" ? " (French)" : ""}.${r.note ? ` I'll prepare "${r.note}" when they reply; quotations wait for your approval.` : ""}`);
+      return reply(waId, `✅ Done: ${prettyNumber(r.wa_id)} has our first message${r.lang === "fr" ? " (French)" : ""}.${r.note ? ` I'll prepare "${r.note}" when they reply${r.direct ? ", and send the quotation straight away." : "; quotations wait for your approval."}` : ""}`);
     }
     if (m.type === "audio" && m.mediaId) {
       let heard = "";

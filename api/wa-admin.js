@@ -584,7 +584,7 @@ module.exports = async function handler(req, res) {
       case "chats": { const o = await ownerState(); return res.json({ chats: await listChats(), bot_enabled: await getSetting("bot_enabled", true), is_owner: !o.set || o.emails.includes(who.email), owner_set: o.set }); }
       case "contact_client": {
         // Same as the WhatsApp command: the Sales Manager message to a client, plus what to prepare when they reply.
-        const cmd = { number: req.body.number, lang: req.body.lang === "fr" ? "fr" : "en", note: String(req.body.note || "").trim().slice(0, 300), by: who.email };
+        const cmd = { number: req.body.number, lang: req.body.lang === "fr" ? "fr" : "en", note: String(req.body.note || "").trim().slice(0, 300), by: who.email, send_quote: Boolean(req.body.send_quote), bank: req.body.bank === "sbm" ? "sbm" : req.body.bank === "none" ? "none" : "" };
         return res.json({ ok: true, contacted: await contactClient(cmd) });
       }
       case "voice_test": {
