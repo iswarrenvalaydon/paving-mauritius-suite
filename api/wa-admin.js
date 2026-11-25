@@ -591,6 +591,12 @@ module.exports = async function handler(req, res) {
         return res.json({ numbers: await getSetting("factory_reporters", []) });
       }
       case "review_export": return res.json({ text: await reviewExport(Number(value) || 7) });
+      case "catch_up": {
+        // Same as the 7:00 run: answer what arrived overnight (automatic sending must be on).
+        const r = await require("./morning-catchup").catchUp();
+        await logEvent("catch_up_by", { by: who.email, ...r });
+        return res.json({ ok: true, ...r });
+      }
       case "missed_backlog": {
         const mb = require("./_lib/missedbacklog");
         if (value === "send") { const r = await mb.sendBacklog(20); await logEvent("missed_backlog_by", { by: who.email, ...r, failed: r.failed.length }); return res.json({ ok: true, ...r }); }

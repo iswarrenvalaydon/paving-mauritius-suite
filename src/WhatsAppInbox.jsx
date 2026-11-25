@@ -274,6 +274,10 @@ export default function WhatsAppInbox(){
                 {busy?"Connecting…":"Connect WhatsApp to the Suite"}
               </button>
             )}
+            <div style={{marginTop:18,fontWeight:700,color:BLUE,fontSize:14}}>Overnight messages</div>
+            <div style={{fontSize:12,color:MID_GREY,marginBottom:6}}>Every day at 7:00 the bot answers what arrived overnight. Tap here to do it now (needs automatic sending on). Quotations, payment proofs and anything flagged still wait for you.</div>
+            <button onClick={async()=>{ const r=await act("catch_up",{},""); if(r) window.alert(r.skipped?`Nothing done: ${r.skipped}`:`Sent: ${r.sent}\nWritten: ${r.written}\nStill waiting for you: ${r.held}${r.errors?`\nErrors: ${r.errors}`:""}`); }} disabled={busy}
+              style={btn(GREEN,"#fff",{padding:"6px 12px",fontSize:13,marginBottom:6})}>☀️ Answer overnight messages now</button>
             <div style={{marginTop:18,fontWeight:700,color:BLUE,fontSize:14}}>Old missed calls</div>
             <div style={{fontSize:12,color:MID_GREY,marginBottom:6}}>Sends the "Sorry we missed your call" message once to everyone who called and was never answered. Saved contacts, staff, and anyone already answered or who wrote since are skipped.</div>
             <button onClick={async()=>{ const r=await act("missed_backlog",{value:"preview"},""); if(r) setOldCalls(r.calls||[]); }} disabled={busy}
