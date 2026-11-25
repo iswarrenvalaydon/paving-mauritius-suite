@@ -57,6 +57,9 @@ export default function WhatsAppInbox(){
   const [botEnabled,setBotEnabled]=useState(true);
   const [isOwner,setIsOwner]=useState(true); // Setup is for the owner only, once one is set
   const [voiceOut,setVoiceOut]=useState(null); // result of the voice test
+  const [rec,setRec]=useState(false); // microphone is recording
+  const [cmdOut,setCmdOut]=useState(null); // what the microphone command understood, waiting for Confirm
+  const recRef=useRef({});
   const [contactForm,setContactForm]=useState({number:"",lang:"en",note:""});
   const [selected,setSelected]=useState(null);
   const [chat,setChat]=useState(null);
@@ -295,6 +298,42 @@ export default function WhatsAppInbox(){
             <input value={contactForm.note} onChange={e=>setContactForm({...contactForm,note:e.target.value})} placeholder="Optional: e.g. quotation for 20 m² of 600x300 Light Grey" style={{width:"100%",boxSizing:"border-box",padding:8,fontSize:14,borderRadius:6,border:"1px solid #ccc",marginBottom:6}}/>
             <button onClick={async()=>{ const r=await act("contact_client",contactForm,""); if(r){ setInfo(`✅ First message sent to ${r.contacted.pretty}`); setContactForm({number:"",lang:contactForm.lang,note:""}); } }} disabled={busy||contactForm.number.replace(/\D/g,"").length<8}
               style={btn(GREEN,"#fff",{padding:"6px 12px",fontSize:13,marginBottom:6})}>Contact this client</button>
+            <div style={{marginTop:18,fontWeight:700,color:BLUE,fontSize:14}}>Voice command</div>
+            <div style={{fontSize:12,color:MID_GREY,marginBottom:6}}>Tap, speak, tap again. For example: "Contact 5762 9412 in French, send quotation for 20 m² of 600x300". It shows what it heard and waits for your Confirm. Only visible to you; nothing goes through the WhatsApp chat.</div>
+            <button disabled={busy&&!rec} onClick={async()=>{
+              if(rec){ try{ recRef.current.mr.stop(); }catch{ setRec(false); } return; }
+              if(!navigator.mediaDevices||!window.MediaRecorder){ setError("This browser can't record. Use Chrome or Safari, or the Voice test with a file."); return; }
+              try{
+                const stream=await navigator.mediaDevices.getUserMedia({audio:true});
+                const mr=new window.MediaRecorder(stream); const chunks=[];
+                mr.ondataavailable=(ev)=>{ if(ev.data&&ev.data.size) chunks.push(ev.data); };
+                mr.onstop=async()=>{
+                  window.clearTimeout(recRef.current.t); stream.getTracks().forEach(t=>t.stop()); setRec(false);
+                  const blob=new Blob(chunks,{type:mr.mimeType||"audio/webm"});
+                  if(blob.size<1500){ setError("I didn't hear anything. Try again."); return; }
+                  const data=await new Promise((ok)=>{ const rd=new FileReader(); rd.onload=()=>ok(String(rd.result).split(",")[1]||""); rd.readAsDataURL(blob); });
+                  setCmdOut(null); const r=await act("voice_test",{data,mime:blob.type},""); if(r) setCmdOut(r);
+                };
+                recRef.current={mr,t:window.setTimeout(()=>{ try{ mr.stop(); }catch{ /* already stopped */ } },60000)};
+                setCmdOut(null); mr.start(); setRec(true);
+              }catch{ setError("The microphone is blocked. Allow it for this site in your browser settings."); }
+            }} style={btn(rec?"#B91C1C":GREEN,"#fff",{padding:"8px 14px",fontSize:14,marginBottom:6})}>{rec?"⏹ Stop and send":"🎙️ Record a command"}</button>
+            {cmdOut&&(
+              <div style={{border:"1px solid #eee",borderRadius:8,padding:8,fontSize:13,marginBottom:6}}>
+                <div><b>I heard:</b> {cmdOut.heard||"(nothing)"}</div>
+                {cmdOut.command&&cmdOut.command.action==="contact"?(
+                  <>
+                    <div style={{marginTop:4}}>I will contact <b>+{cmdOut.command.number}</b> in {cmdOut.command.lang==="fr"?"French":"English"}{cmdOut.command.note?`, then prepare: ${cmdOut.command.note}`:""}.</div>
+                    <div style={{marginTop:6,display:"flex",gap:8}}>
+                      <button disabled={busy} onClick={async()=>{ const c=cmdOut.command; const r=await act("contact_client",{number:c.number,lang:c.lang,note:c.note||""},""); if(r){ setInfo(`✅ First message sent to ${r.contacted.pretty}`); setCmdOut(null); } }} style={btn(GREEN,"#fff",{padding:"6px 12px",fontSize:13})}>✅ Confirm</button>
+                      <button disabled={busy} onClick={()=>setCmdOut(null)} style={btn("#fff",MID_GREY,{border:"1px solid #ccc",padding:"6px 12px",fontSize:13})}>Cancel</button>
+                    </div>
+                  </>
+                ):(
+                  <div style={{marginTop:4,color:MID_GREY}}>I didn't find a command in it. Try: "Contact 5762 9412".</div>
+                )}
+              </div>
+            )}
             <div style={{marginTop:18,fontWeight:700,color:BLUE,fontSize:14}}>Voice test</div>
             <div style={{fontSize:12,color:MID_GREY,marginBottom:6}}>Choose a recording (English, French or Creole). It shows what the speech service heard and what the bot would do. Nothing is sent to anyone.</div>
             <input type="file" accept="audio/*,video/mp4" disabled={busy} onChange={async(e)=>{ const f=e.target.files&&e.target.files[0]; e.target.value=""; if(!f) return; if(f.size>3000000){ setError("Recording too big (max about 3 MB, about 2 minutes)"); return; }
