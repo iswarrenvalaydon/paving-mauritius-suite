@@ -8,6 +8,7 @@ const { adText, noteAd } = require("./_lib/ads");
 const { mentionsRavin, autoRefer } = require("./_lib/referrals");
 const { handleFactoryReport } = require("./_lib/factory");
 const { autoSend } = require("./_lib/autosend");
+const { testNumbers, resetTestChat, PHRASE: TEST_PHRASE } = require("./_lib/testnum");
 
 let waitUntil = null;
 try { ({ waitUntil } = require("@vercel/functions")); } catch { waitUntil = null; }
@@ -112,6 +113,16 @@ async function factoryFor(waId, triggerId) {
   }
 }
 
+// The reply is not saved in the chat: the chat must be empty so the next message is a first contact.
+async function testReset(waId) {
+  try {
+    await resetTestChat(waId);
+    await sendText(waId, "✅ Test reset: I've forgotten this chat. Your next message starts a new conversation.");
+  } catch (err) {
+    await logEvent("test_reset_error", { wa_id: waId, message: String(err?.message || err).slice(0, 300) });
+  }
+}
+
 async function draftFor(waId, triggerId) {
   try {
     await sleep(DEBOUNCE_MS);
@@ -136,11 +147,13 @@ async function draftFor(waId, triggerId) {
 
 async function handle(body) {
   const changes = collectChanges(body);
-  if (!changes.length) { await logEvent("unknown", body); return { toDraft: [], resendLater: [], referLater: [], factoryLater: [], ownerLater: [] }; }
+  if (!changes.length) { await logEvent("unknown", body); return { toDraft: [], resendLater: [], referLater: [], factoryLater: [], ownerLater: [], testLater: [] }; }
 
   const [botEnabled, staffList, reporterList, ownerNumber] = await Promise.all([getSetting("bot_enabled", true), getSetting("staff_numbers", []), getSetting("factory_reporters", []), getSetting("owner_number", "23057396517")]);
   const ownerId = digits(ownerNumber);
   const ownerLater = [];
+  const testLater = [];
+  const testIds = await testNumbers();
   const staff = new Set((Array.isArray(staffList) ? staffList : []).map(digits));
   const reporters = new Set((Array.isArray(reporterList) ? reporterList : []).map(digits));
   const factoryLater = [];
@@ -176,6 +189,8 @@ async function handle(body) {
           const id = digits(m.from);
           const { data: c } = await db().from("wa_contacts").select("unread,bot_paused,is_staff").eq("wa_id", id).maybeSingle();
           await db().from("wa_contacts").update({ unread: (c?.unread || 0) + 1 }).eq("wa_id", id);
+          // A test number saying "this is a test msg": forget this chat and start fresh (no draft for it).
+          if (testIds.includes(id) && m.type === "text" && TEST_PHRASE.test(m.text?.body || "")) { testLater.push(id); continue; }
           // Only the owner's own number may give commands (typed or by voice note).
           if (ownerId && id === ownerId && !reporters.has(id) && (m.type === "text" || m.type === "audio")) { ownerLater.push([id, { type: m.type, text: m.text?.body || "", mediaId: mediaIdOf(m) }]); continue; }
           if (reporters.has(id)) { if (m.type !== "reaction") factoryLater.push([id, m.id]); continue; }
@@ -241,7 +256,7 @@ async function handle(body) {
       await logEvent(field || "other", value);
     }
   }
-  return { toDraft, resendLater, referLater, factoryLater, ownerLater };
+  return { toDraft, resendLater, referLater, factoryLater, ownerLater, testLater };
 }
 
 // A message from the Suite that WhatsApp dropped for sending too fast: send it again once, 8 s later.
@@ -270,8 +285,9 @@ module.exports = async function handler(req, res) {
   let referLater = [];
   let factoryLater = [];
   let ownerLater = [];
+  let testLater = [];
   try {
-    ({ toDraft, resendLater, referLater = [], factoryLater = [], ownerLater = [] } = await handle(req.body));
+    ({ toDraft, resendLater, referLater = [], factoryLater = [], ownerLater = [], testLater = [] } = await handle(req.body));
   } catch (err) {
     await logEvent("webhook_error", { message: String(err?.message || err), body: req.body });
   }
@@ -281,6 +297,7 @@ module.exports = async function handler(req, res) {
     ...resendLater.map((id) => resendFailed(id)),
     ...[...new Set(referLater)].map((id) => autoRefer(id, "phone").catch(() => null)),
     ...factoryLater.map(([waId, msgId]) => factoryFor(waId, msgId)),
+    ...[...new Set(testLater)].map((id) => testReset(id)),
     ...ownerLater.map(([waId, m]) => require("./_lib/owner").handleOwnerMessage(waId, m)),
   ]);
   if (waitUntil) {

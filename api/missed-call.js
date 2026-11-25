@@ -20,6 +20,9 @@ const MISSED_TEXT = "Hello, this is Paving Mauritius Ltd. Sorry we missed your c
 async function handleMissedCall({ number, kind, name }) {
   const waId = waIdOf(number);
   if (!waId) return { skipped: "no number (private or saved contact)" };
+  // A test number starts fresh on every missed call: forget the old chat, then treat it like a first-time caller.
+  const { isTestNumber, resetTestChat } = require("./_lib/testnum");
+  if (await isTestNumber(waId)) await resetTestChat(waId);
   const [staff, ravin] = await Promise.all([getSetting("staff_numbers", []), getSetting("ravin_number", "")]);
   const own = "23057254201";
   if (waId === own || (Array.isArray(staff) && staff.map(digits).includes(waId)) || digits(ravin) === waId) return { skipped: "staff" };
