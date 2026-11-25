@@ -95,6 +95,8 @@ async function contactClient({ number, lang, note, by, send_quote, bank }) {
   // Only the owner's channels (WhatsApp from his number, or his Setup) can set this.
   const approved = Boolean(note) && Boolean(send_quote) && (bank === "sbm" || bank === "none");
   if (note) {
+    // The owner's new command overrides anything still in process for this client: waiting suggestions are dropped.
+    await db().from("wa_drafts").update({ status: "superseded", decided_at: new Date().toISOString() }).eq("wa_id", waId).eq("status", "pending");
     const orders = (await getSetting("contact_orders", {})) || {};
     orders[waId] = { note, at: new Date().toISOString(), by: by || "", approved, bank: approved ? bank : "" };
     await setSetting("contact_orders", orders);

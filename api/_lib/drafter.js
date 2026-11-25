@@ -222,7 +222,7 @@ async function draftReply(waId) {
   const refs = await referencePhotos(messages);
   const content = [
     { type: "text", text: `Conversation so far (oldest first):\n${transcript(messages, labels)}` },
-    ...(order && order.note ? [{ type: "text", text: `Our Sales Manager contacted this client first and asked you to take care of this: "${order.note}". Do it with the client's reply.${order.approved ? " He has already approved this quotation himself: prepare the quotation he described now (whatever the client last wrote), using exactly his product, size and area, with one short covering sentence, and do not ask for details he already gave. If anything he said is unclear or missing (product, colour or area), do not guess: ask the team instead." : " Any quotation waits for the team's approval as usual."}` }] : []),
+    ...(order && order.note ? [{ type: "text", text: `Our Sales Manager contacted this client first and asked you to take care of this: "${order.note}". Do it with the client's reply.${order.approved ? " He has already approved this quotation himself, and his command is the NEWEST and final instruction: it overrides everything earlier in this chat (what the client said or asked before, earlier quotations, earlier suggestions and team notes). Do not compare it with earlier quotations and do not ask the team to check that it matches. Prepare the quotation he described now (whatever the client last wrote), using exactly his product, size and area, with one short covering sentence, and do not ask for details he already gave. If anything he said is unclear or missing (product, colour or area), do not guess: ask the team instead." : " Any quotation waits for the team's approval as usual."}` }] : []),
     ...(ad ? [{ type: "text", text: adPrompt(ad, adInfo) }] : []),
     { type: "text", text: photoPrompt(albumList) },
     ...(blocks.length ? [{ type: "text", text: "Attachments from the client:" }, ...blocks] : []),
@@ -256,6 +256,9 @@ async function draftReply(waId) {
   const rawQuotes = Array.isArray(parsed.quotes) ? parsed.quotes : parsed.quote ? [parsed.quote] : [];
   const quotes = rawQuotes.map(cleanQuote).filter(Boolean).slice(0, 4);
   const quote = quotes.length ? quotes[0] : null;
+  // The owner's own command (product, area, bank) is the decision: no "please check" flag on that one quotation.
+  const ordered = order && order.approved && quotes.length === 1;
+  if (ordered) { parsed.needs_team = false; parsed.team_note = `Quotation ordered by the Sales Manager's own command (${order.bank === "sbm" ? "SBM bank details" : "no bank details"}): ${order.note}`; }
   // Client messages are numbered #1, #2… in the transcript; "reply_to" says which one each message answers.
   const inbound = messages.filter((m) => m.direction === "in");
   const replyTo = Array.isArray(parsed.reply_to) ? parsed.reply_to : [];
@@ -270,8 +273,8 @@ async function draftReply(waId) {
     .slice(0, 3);
   return {
     reply: parts.join(MESSAGE_BREAK), // with a quote, these go out after the PDF
-    needs_team: Boolean(parsed.needs_team) || adUnknown,
-    team_note: [adUnknown ? "📢 New ad: tell the bot what's in it (box above), then it can quote." : "", String(parsed.team_note || "").trim()].filter(Boolean).join(" "),
+    needs_team: Boolean(parsed.needs_team) || (adUnknown && !ordered),
+    team_note: [adUnknown && !ordered ? "📢 New ad: tell the bot what's in it (box above), then it can quote." : "", String(parsed.team_note || "").trim()].filter(Boolean).join(" "),
     quote,
     quotes,
     attach: parsed.attach === "price_list" ? "price_list" : null,
