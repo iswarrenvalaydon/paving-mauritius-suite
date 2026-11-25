@@ -2,7 +2,7 @@
 // (wa_settings.team_emails). The browser never sees the WhatsApp, Claude or Supabase secret keys.
 const { splitReply, replyTarget, db, hookToken, missedCallToken, safeEqual, d360, sendText, downloadMedia, uploadMedia, sendDocument, insertDraft, getSetting, setSetting, logEvent } = require("./_lib/common");
 const { draftReply, draftRow } = require("./_lib/drafter");
-const { autoSettings } = require("./_lib/autosend");
+const { autoSettings, autoSend } = require("./_lib/autosend");
 const { getAds, describeAd, deleteAd, pickedAds, pickAd, resolveAd } = require("./_lib/ads");
 const { albums, addPhoto, deletePhoto, getPhotos, albumPhotos, knownAlbums } = require("./_lib/photos");
 const { TEMPLATES, tplText, prettyNumber, storeOut, notifySalesManager, sendLayerTemplate, getReferral, notifyRavin, mentionsRavin, autoRefer, pastRavinMentions } = require("./_lib/referrals");
@@ -647,7 +647,10 @@ module.exports = async function handler(req, res) {
         // The team says which ad a client came from (or "none"); the bot then writes the reply.
         if (!waId) return res.status(400).json({ error: "Which chat?" });
         await pickAd(waId, String(value || ""));
-        return res.json({ ok: true, draft: await redraft(waId) });
+        const draft = await redraft(waId);
+        // The team has now confirmed the ad, so the bot's reply goes out by itself (same hold rules as any other reply).
+        const auto = await autoSend(waId, draft, { adPicked: true }).catch(() => null);
+        return res.json({ ok: true, draft, auto });
       }
       case "pause_contact":
         await db().from("wa_contacts").update({ bot_paused: Boolean(value) }).eq("wa_id", waId);

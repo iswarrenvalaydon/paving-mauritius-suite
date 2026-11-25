@@ -35,7 +35,7 @@ function hasEstimate(text) {
 }
 
 // Why this suggestion must wait for the team, or null if it can go out by itself.
-async function holdReason(waId, row, now = new Date()) {
+async function holdReason(waId, row, now = new Date(), opts = {}) {
   if (!row) return "no suggestion";
   if (row.needs_team) return "the bot flagged it for the team";
   const x = row.quote || {};
@@ -52,6 +52,8 @@ async function holdReason(waId, row, now = new Date()) {
   const list = data || []; // newest first
   for (const m of list) {
     if (m.direction === "out") break;
+    // After the team picked the ad, the ad click itself (sent as an "unsupported" message) is not a client photo or voice note.
+    if (opts.adPicked && m.type === "unsupported") continue;
     if (MEDIA.includes(m.type)) return "the client sent a photo, file or voice note";
   }
   const since = now.getTime() - TEAM_ACTIVE_MS;
@@ -60,10 +62,10 @@ async function holdReason(waId, row, now = new Date()) {
 }
 
 // Called right after a new suggestion is saved. Returns what happened, for the logs.
-async function autoSend(waId, row) {
+async function autoSend(waId, row, opts = {}) {
   const cfg = await autoSettings();
   if (!cfg.enabled || !row) return null;
-  const why = await holdReason(waId, row);
+  const why = await holdReason(waId, row, new Date(), opts);
   if (why) {
     if (!row.needs_team) await db().from("wa_drafts").update({ team_note: [row.team_note, `(Not sent automatically: ${why}.)`].filter(Boolean).join(" ") }).eq("id", row.id);
     return { held: why };
