@@ -28,6 +28,16 @@ const TEMPLATES = {
     body: "Hey Paving: no answer about the factory breakdown reported on {{1}} ({{2}}). I asked {{3}} this morning and it isn't marked as repaired yet.",
     example: ["24 Nov", "mixer motor", "Julien"],
   },
+  contactEn: {
+    name: "contact_client_en", lang: "en",
+    body: "Hello, this is Paving Mauritius Ltd. Following your conversation with our Sales Manager, he has asked me to take care of your enquiry. How can I help you today?",
+    example: null,
+  },
+  contactFr: {
+    name: "contact_client_fr", lang: "fr",
+    body: "Bonjour, ici Paving Mauritius Ltd. Suite à votre échange avec notre Sales Manager, il m'a demandé de m'occuper de votre demande. Comment puis-je vous aider ?",
+    example: null,
+  },
   missed: {
     name: "missed_call",
     body: "Hello, this is Paving Mauritius Ltd. Sorry we missed your call! How can we help you? You can reply here on WhatsApp.",

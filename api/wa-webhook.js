@@ -136,9 +136,11 @@ async function draftFor(waId, triggerId) {
 
 async function handle(body) {
   const changes = collectChanges(body);
-  if (!changes.length) { await logEvent("unknown", body); return { toDraft: [], resendLater: [], referLater: [], factoryLater: [] }; }
+  if (!changes.length) { await logEvent("unknown", body); return { toDraft: [], resendLater: [], referLater: [], factoryLater: [], ownerLater: [] }; }
 
-  const [botEnabled, staffList, reporterList] = await Promise.all([getSetting("bot_enabled", true), getSetting("staff_numbers", []), getSetting("factory_reporters", [])]);
+  const [botEnabled, staffList, reporterList, ownerNumber] = await Promise.all([getSetting("bot_enabled", true), getSetting("staff_numbers", []), getSetting("factory_reporters", []), getSetting("owner_number", "23057396517")]);
+  const ownerId = digits(ownerNumber);
+  const ownerLater = [];
   const staff = new Set((Array.isArray(staffList) ? staffList : []).map(digits));
   const reporters = new Set((Array.isArray(reporterList) ? reporterList : []).map(digits));
   const factoryLater = [];
@@ -174,6 +176,8 @@ async function handle(body) {
           const id = digits(m.from);
           const { data: c } = await db().from("wa_contacts").select("unread,bot_paused,is_staff").eq("wa_id", id).maybeSingle();
           await db().from("wa_contacts").update({ unread: (c?.unread || 0) + 1 }).eq("wa_id", id);
+          // Only the owner's own number may give commands (typed or by voice note).
+          if (ownerId && id === ownerId && !reporters.has(id) && (m.type === "text" || m.type === "audio")) { ownerLater.push([id, { type: m.type, text: m.text?.body || "", mediaId: mediaIdOf(m) }]); continue; }
           if (reporters.has(id)) { if (m.type !== "reaction") factoryLater.push([id, m.id]); continue; }
           if (botEnabled !== false && !c?.bot_paused && !c?.is_staff && !staff.has(id) && m.type !== "reaction") toDraft.push([id, m.id]);
         }
@@ -237,7 +241,7 @@ async function handle(body) {
       await logEvent(field || "other", value);
     }
   }
-  return { toDraft, resendLater, referLater, factoryLater };
+  return { toDraft, resendLater, referLater, factoryLater, ownerLater };
 }
 
 // A message from the Suite that WhatsApp dropped for sending too fast: send it again once, 8 s later.
@@ -265,8 +269,9 @@ module.exports = async function handler(req, res) {
   let resendLater = [];
   let referLater = [];
   let factoryLater = [];
+  let ownerLater = [];
   try {
-    ({ toDraft, resendLater, referLater = [], factoryLater = [] } = await handle(req.body));
+    ({ toDraft, resendLater, referLater = [], factoryLater = [], ownerLater = [] } = await handle(req.body));
   } catch (err) {
     await logEvent("webhook_error", { message: String(err?.message || err), body: req.body });
   }
@@ -276,6 +281,7 @@ module.exports = async function handler(req, res) {
     ...resendLater.map((id) => resendFailed(id)),
     ...[...new Set(referLater)].map((id) => autoRefer(id, "phone").catch(() => null)),
     ...factoryLater.map(([waId, msgId]) => factoryFor(waId, msgId)),
+    ...ownerLater.map(([waId, m]) => require("./_lib/owner").handleOwnerMessage(waId, m)),
   ]);
   if (waitUntil) {
     waitUntil(jobs);

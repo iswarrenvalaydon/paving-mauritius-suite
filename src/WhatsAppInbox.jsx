@@ -55,6 +55,9 @@ export default function WhatsAppInbox(){
   const [view,setView]=useState("list");
   const [chats,setChats]=useState([]);
   const [botEnabled,setBotEnabled]=useState(true);
+  const [isOwner,setIsOwner]=useState(true); // Setup is for the owner only, once one is set
+  const [voiceOut,setVoiceOut]=useState(null); // result of the voice test
+  const [contactForm,setContactForm]=useState({number:"",lang:"en",note:""});
   const [selected,setSelected]=useState(null);
   const [chat,setChat]=useState(null);
   const [draftText,setDraftText]=useState("");
@@ -97,6 +100,7 @@ export default function WhatsAppInbox(){
       const data=await api("chats");
       setChats(data.chats||[]);
       setBotEnabled(data.bot_enabled!==false);
+      setIsOwner(data.is_owner!==false);
       setError("");
     }catch(e){ setError(e.message); }
   },[api]);
@@ -237,7 +241,7 @@ export default function WhatsAppInbox(){
           <button onClick={toggleBot} disabled={busy} style={btn(botEnabled?LIGHT_GREEN:LIGHT_ORANGE,botEnabled?GREEN:ORANGE,{padding:"8px 12px",fontSize:13})}>
             {botEnabled?"🤖 Bot on":"⏸ Bot paused"}
           </button>
-          <button onClick={openSetup} style={btn(LIGHT_BLUE,BLUE,{padding:"8px 12px",fontSize:13})}>⚙️ Setup</button>
+          {isOwner&&<button onClick={openSetup} style={btn(LIGHT_BLUE,BLUE,{padding:"8px 12px",fontSize:13})}>⚙️ Setup</button>}
         </>
       )}
     </div>
@@ -264,8 +268,16 @@ export default function WhatsAppInbox(){
         {!setup&&<div style={{color:MID_GREY}}>Checking…</div>}
         {setup&&(
           <>
+            {!setup.owner_set&&(
+              <div style={{background:LIGHT_ORANGE,border:`1px solid ${ORANGE}`,borderRadius:8,padding:10,marginBottom:10,fontSize:13}}>
+                Setup is open to every login. Tap the button to make <b>this login</b> the only owner: nobody else (for example Julien) will see or use Setup afterwards.
+                <div><button onClick={async()=>{ if(window.confirm("Make this login the only owner of Setup? Only do this from your own login.")){ const r=await act("claim_owner",{},"You are now the owner"); if(r) openSetup(); } }} disabled={busy}
+                  style={btn(ORANGE,"#fff",{marginTop:8,padding:"6px 12px",fontSize:13})}>Make me the owner</button></div>
+              </div>
+            )}
             {row(setup.keys?.whatsapp,"WhatsApp key (360dialog)")}
             {row(setup.keys?.claude,"Claude key")}
+            {row(setup.keys?.speech,"Speech key (voice commands)",setup.keys?.speech?null:"Add OPENAI_API_KEY in Vercel to switch voice commands on")}
             {row(setup.keys?.database,"Database key")}
             {row(setup.tables,"Bot tables in Supabase",setup.tables?null:"Run the SQL from supabase/whatsapp_bot.sql in Supabase's SQL Editor")}
             {row(setup.webhook_ok,"WhatsApp messages arriving in the Suite",setup.webhook_url||setup.webhook_error||"Not connected yet")}
@@ -273,6 +285,26 @@ export default function WhatsAppInbox(){
               <button onClick={connectWebhook} disabled={busy||!setup.tables} style={btn(GREEN,"#fff",{marginTop:14,width:"100%"})}>
                 {busy?"Connecting…":"Connect WhatsApp to the Suite"}
               </button>
+            )}
+            <div style={{marginTop:18,fontWeight:700,color:BLUE,fontSize:14}}>Contact a client</div>
+            <div style={{fontSize:12,color:MID_GREY,marginBottom:6}}>Sends the Sales Manager's first message. When the client replies, the bot carries on and prepares what you write below (quotations wait for your approval). You can also WhatsApp the bot: "contact 5762 9412 in French, send quotation for 20 m² of 600x300", by text or voice note.</div>
+            <div style={{display:"flex",gap:8,flexWrap:"wrap",marginBottom:6}}>
+              <input value={contactForm.number} onChange={e=>setContactForm({...contactForm,number:e.target.value})} placeholder="Number, e.g. 5762 9412" inputMode="tel" style={{flex:1,minWidth:150,padding:8,fontSize:14,borderRadius:6,border:"1px solid #ccc"}}/>
+              <select value={contactForm.lang} onChange={e=>setContactForm({...contactForm,lang:e.target.value})} style={{padding:8,fontSize:14,borderRadius:6,border:"1px solid #ccc"}}><option value="en">English</option><option value="fr">Français</option></select>
+            </div>
+            <input value={contactForm.note} onChange={e=>setContactForm({...contactForm,note:e.target.value})} placeholder="Optional: e.g. quotation for 20 m² of 600x300 Light Grey" style={{width:"100%",boxSizing:"border-box",padding:8,fontSize:14,borderRadius:6,border:"1px solid #ccc",marginBottom:6}}/>
+            <button onClick={async()=>{ const r=await act("contact_client",contactForm,""); if(r){ setInfo(`✅ First message sent to ${r.contacted.pretty}`); setContactForm({number:"",lang:contactForm.lang,note:""}); } }} disabled={busy||contactForm.number.replace(/\D/g,"").length<8}
+              style={btn(GREEN,"#fff",{padding:"6px 12px",fontSize:13,marginBottom:6})}>Contact this client</button>
+            <div style={{marginTop:18,fontWeight:700,color:BLUE,fontSize:14}}>Voice test</div>
+            <div style={{fontSize:12,color:MID_GREY,marginBottom:6}}>Choose a recording (English, French or Creole). It shows what the speech service heard and what the bot would do. Nothing is sent to anyone.</div>
+            <input type="file" accept="audio/*,video/mp4" disabled={busy} onChange={async(e)=>{ const f=e.target.files&&e.target.files[0]; e.target.value=""; if(!f) return; if(f.size>3000000){ setError("Recording too big (max about 3 MB, about 2 minutes)"); return; }
+              const data=await new Promise((ok)=>{ const rd=new FileReader(); rd.onload=()=>ok(String(rd.result).split(",")[1]||""); rd.readAsDataURL(f); });
+              setVoiceOut(null); const r=await act("voice_test",{data,mime:f.type||"audio/mp4"},""); if(r) setVoiceOut(r); }} style={{fontSize:13,marginBottom:6}}/>
+            {voiceOut&&(
+              <div style={{border:"1px solid #eee",borderRadius:8,padding:8,fontSize:13,marginBottom:6}}>
+                <div><b>Heard:</b> {voiceOut.heard||"(nothing)"}</div>
+                <div style={{marginTop:4,color:MID_GREY}}>{voiceOut.command&&voiceOut.command.action==="contact"?`Would contact +${voiceOut.command.number} in ${voiceOut.command.lang==="fr"?"French":"English"}${voiceOut.command.note?`, then prepare: ${voiceOut.command.note}`:""}`:"No command found in it."}</div>
+              </div>
             )}
             <div style={{marginTop:18,fontWeight:700,color:BLUE,fontSize:14}}>Overnight messages</div>
             <div style={{fontSize:12,color:MID_GREY,marginBottom:6}}>Every day at 7:00 the bot answers what arrived overnight. Tap here to do it now (needs automatic sending on). Quotations, payment proofs and anything flagged still wait for you.</div>
@@ -318,14 +350,16 @@ export default function WhatsAppInbox(){
                   {row(t.referral==="approved","Template: referral message to Ravin",t.error||label(t.referral))}
                   {row(t.payment==="approved","Template: payment update to Ravin",t.error||label(t.payment))}
                   {row(t.missed==="approved","Template: missed-call message to clients",t.error||label(t.missed))}
+                  {row(t.contactEn==="approved","Template: Sales Manager first message (English)",t.error||label(t.contactEn))}
+                  {row(t.contactFr==="approved","Template: Sales Manager first message (French)",t.error||label(t.contactFr))}
                   {row(t.sales==="approved","Template: big-order alert to the Sales Manager",t.error||label(t.sales))}
                   {row(t.breakdownCheck==="approved","Template: \"is it repaired?\" breakdown check",t.error||label(t.breakdownCheck))}
                   {row(t.breakdownAlert==="approved","Template: breakdown alert to Iswarren",t.error||label(t.breakdownAlert))}
-                  {[t.referral,t.payment,t.missed,t.sales,t.breakdownCheck,t.breakdownAlert].includes("missing")&&(
+                  {[t.referral,t.payment,t.missed,t.sales,t.breakdownCheck,t.breakdownAlert,t.contactEn,t.contactFr].includes("missing")&&(
                     <button onClick={async()=>{ const r=await act("create_referral_template",{},""); if(r){ if(r.failed&&r.failed.length) setError(`WhatsApp refused: ${r.failed.join(" · ")}`); else setInfo("Templates sent to WhatsApp for approval"); openSetup(); } }} disabled={busy}
                       style={btn(GREEN,"#fff",{marginTop:8,padding:"8px 12px",fontSize:13})}>Create the templates</button>
                   )}
-                  {[t.referral,t.payment,t.missed,t.sales,t.breakdownCheck,t.breakdownAlert].some(x=>String(x||"").startsWith("pending"))&&<div style={{fontSize:12,color:MID_GREY,marginTop:4}}>WhatsApp is reviewing them, usually within minutes, sometimes up to a day.</div>}
+                  {[t.referral,t.payment,t.missed,t.sales,t.breakdownCheck,t.breakdownAlert,t.contactEn,t.contactFr].some(x=>String(x||"").startsWith("pending"))&&<div style={{fontSize:12,color:MID_GREY,marginTop:4}}>WhatsApp is reviewing them, usually within minutes, sometimes up to a day.</div>}
                 </>
               );
             })()}

@@ -206,7 +206,8 @@ async function draftReply(waId) {
   const messages = (recent || []).reverse();
   if (!messages.length) return null;
 
-  const [rulebook, examples, ravin, ads, albumList, picks] = await Promise.all([getSetting("rulebook", RULEBOOK), getSetting("examples", []), getSetting("ravin_number", ""), getAds(), photoAlbums().catch(() => []), pickedAds()]);
+  const [rulebook, examples, ravin, ads, albumList, picks, orders] = await Promise.all([getSetting("rulebook", RULEBOOK), getSetting("examples", []), getSetting("ravin_number", ""), getAds(), photoAlbums().catch(() => []), pickedAds(), getSetting("contact_orders", {})]);
+  const order = orders && orders[waId] && Date.now() - new Date(orders[waId].at) < 14 * 86400000 ? orders[waId] : null;
   if (needsAdPick(messages, picks[waId], ads)) {
     // Nothing goes to the client until the team says which ad it was.
     return {
@@ -221,6 +222,7 @@ async function draftReply(waId) {
   const refs = await referencePhotos(messages);
   const content = [
     { type: "text", text: `Conversation so far (oldest first):\n${transcript(messages, labels)}` },
+    ...(order && order.note ? [{ type: "text", text: `Our Sales Manager contacted this client first and asked you to take care of this: "${order.note}". Do it with the client's reply (ask for anything missing). Any quotation waits for the team's approval as usual.` }] : []),
     ...(ad ? [{ type: "text", text: adPrompt(ad, adInfo) }] : []),
     { type: "text", text: photoPrompt(albumList) },
     ...(blocks.length ? [{ type: "text", text: "Attachments from the client:" }, ...blocks] : []),

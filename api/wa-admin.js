@@ -3,6 +3,7 @@
 const { splitReply, replyTarget, db, hookToken, missedCallToken, safeEqual, d360, sendText, downloadMedia, uploadMedia, sendDocument, insertDraft, getSetting, setSetting, logEvent } = require("./_lib/common");
 const { draftReply, draftRow } = require("./_lib/drafter");
 const { autoSettings, autoSend } = require("./_lib/autosend");
+const { ownerState, isOwnerEmail, transcribe, parseCommand, contactClient } = require("./_lib/owner");
 const { getAds, describeAd, deleteAd, pickedAds, pickAd, resolveAd } = require("./_lib/ads");
 const { albums, addPhoto, deletePhoto, getPhotos, albumPhotos, knownAlbums } = require("./_lib/photos");
 const { TEMPLATES, tplText, prettyNumber, storeOut, notifySalesManager, sendLayerTemplate, getReferral, notifyRavin, mentionsRavin, autoRefer, pastRavinMentions } = require("./_lib/referrals");
@@ -109,7 +110,7 @@ async function createMissingTemplates() {
       await d360("/v1/configs/templates", {
         method: "POST",
         body: {
-          name: t.name, category: "UTILITY", language: "en", allow_category_change: true,
+          name: t.name, category: "UTILITY", language: t.lang || "en", allow_category_change: true,
           components: [{ type: "BODY", text: t.body, ...(t.example ? { example: { body_text: [t.example] } } : {}) }],
         },
       });
@@ -423,6 +424,7 @@ async function status(req) {
     whatsapp: Boolean(process.env.D360_API_KEY),
     claude: Boolean(process.env.ANTHROPIC_API_KEY),
     database: Boolean(process.env.SUPABASE_SECRET_KEY),
+    speech: Boolean(process.env.OPENAI_API_KEY),
   } };
   try {
     const { error } = await db().from("wa_settings").select("key").limit(1);
@@ -435,6 +437,7 @@ async function status(req) {
     out.auto_send = await autoSettings();
     out.sales_manager_number = await getSetting("sales_manager_number", "23058212040");
     out.owner_number = await getSetting("owner_number", "23057396517");
+    out.owner_set = (await ownerState()).set;
     out.missed_call_url = `${siteUrl(req)}/api/missed-call?token=${missedCallToken()}&number=`;
     out.tables = true;
   } catch (err) { out.tables = false; out.table_error = String(err.message || err); }
@@ -554,6 +557,17 @@ module.exports = async function handler(req, res) {
   }
 
   const { action, wa_id: rawId, body, draft_id: draftId, value } = req.body || {};
+  // Setup and everything in it belongs to the owner. Once an owner is set, other logins (e.g. Julien) are refused here,
+  // not just shown no buttons. To give someone a part of Setup back, remove its action from this list.
+  const OWNER_ONLY = new Set(["status", "create_login", "team", "remove_login", "auto_send", "team_numbers", "staff_numbers", "ravin_number", "connect_webhook", "create_referral_template", "describe_ad", "delete_ad", "delete_example", "review_export", "catch_up", "missed_backlog", "past_referrals", "factory_reporters", "voice_test", "contact_client"]);
+  if (action === "claim_owner") {
+    const st = await ownerState();
+    if (st.set) return res.status(403).json({ error: st.emails.includes(who.email) ? "You are already the owner." : "An owner is already set." });
+    await setSetting("owner_emails", [who.email]);
+    await logEvent("owner_claimed", { email: who.email });
+    return res.json({ ok: true });
+  }
+  if (OWNER_ONLY.has(action) && !(await isOwnerEmail(who.email))) return res.status(403).json({ error: "Only the owner can use Setup." });
   if (action === "create_login") {
     try { return res.json(await createLogin(req.body.email, req.body.password)); }
     catch (e) { return res.status(400).json({ error: String(e.message || e) }); }
@@ -567,7 +581,19 @@ module.exports = async function handler(req, res) {
   try {
     switch (action) {
       case "status": return res.json(await status(req));
-      case "chats": return res.json({ chats: await listChats(), bot_enabled: await getSetting("bot_enabled", true) });
+      case "chats": { const o = await ownerState(); return res.json({ chats: await listChats(), bot_enabled: await getSetting("bot_enabled", true), is_owner: !o.set || o.emails.includes(who.email), owner_set: o.set }); }
+      case "contact_client": {
+        // Same as the WhatsApp command: the Sales Manager message to a client, plus what to prepare when they reply.
+        const cmd = { number: req.body.number, lang: req.body.lang === "fr" ? "fr" : "en", note: String(req.body.note || "").trim().slice(0, 300), by: who.email };
+        return res.json({ ok: true, contacted: await contactClient(cmd) });
+      }
+      case "voice_test": {
+        // Owner only: what the speech service heard, and what the bot would do. Nothing is sent.
+        const heard = await transcribe(req.body.data, req.body.mime);
+        let cmd = null;
+        try { cmd = await parseCommand(heard); } catch (e) { cmd = { action: "none", error: String(e.message || e) }; }
+        return res.json({ ok: true, heard, command: cmd });
+      }
       case "chat": return res.json(await getChat(waId));
       case "send": return res.json(await send(waId, body, draftId, req.body.photos));
       case "photos": return res.json({ albums: await albums(), photos: await getPhotos() });
