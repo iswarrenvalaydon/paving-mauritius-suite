@@ -222,7 +222,7 @@ async function draftReply(waId) {
   const refs = await referencePhotos(messages);
   const content = [
     { type: "text", text: `Conversation so far (oldest first):\n${transcript(messages, labels)}` },
-    ...(order && order.note ? [{ type: "text", text: `Our Sales Manager contacted this client first and asked you to take care of this: "${order.note}". Do it with the client's reply.${order.approved ? " He has already approved this quotation himself: as soon as the client replies (whatever they say), prepare the quotation he described, using exactly his product, size and area, with one short covering sentence, and do not ask for details he already gave. If anything he said is unclear or missing (product, colour or area), do not guess: ask the team instead." : " Any quotation waits for the team's approval as usual."}` }] : []),
+    ...(order && order.note ? [{ type: "text", text: `Our Sales Manager contacted this client first and asked you to take care of this: "${order.note}". Do it with the client's reply.${order.approved ? " He has already approved this quotation himself: prepare the quotation he described now (whatever the client last wrote), using exactly his product, size and area, with one short covering sentence, and do not ask for details he already gave. If anything he said is unclear or missing (product, colour or area), do not guess: ask the team instead." : " Any quotation waits for the team's approval as usual."}` }] : []),
     ...(ad ? [{ type: "text", text: adPrompt(ad, adInfo) }] : []),
     { type: "text", text: photoPrompt(albumList) },
     ...(blocks.length ? [{ type: "text", text: "Attachments from the client:" }, ...blocks] : []),

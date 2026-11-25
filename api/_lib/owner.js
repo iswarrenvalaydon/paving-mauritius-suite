@@ -1,7 +1,7 @@
 // The owner's own channel: only Iswarren (his login in the Suite, his number on WhatsApp) can use it.
 //  - "contact 5762 9412 [in French] [send quotation for ...]": the bot opens the chat with the Sales Manager template.
 //  - voice notes from his number are turned into text (OpenAI), shown back to him, and run after he says yes.
-const { db, getSetting, setSetting, d360, sendText, downloadMedia, logEvent } = require("./common");
+const { db, getSetting, setSetting, d360, sendText, downloadMedia, logEvent, insertDraft } = require("./common");
 const { TEMPLATES, storeOut, prettyNumber } = require("./referrals");
 
 const digits = (s) => String(s || "").replace(/\D/g, "");
@@ -90,7 +90,34 @@ async function contactClient({ number, lang, note, by, send_quote, bank }) {
   const t = lang === "fr" ? TEMPLATES.contactFr : TEMPLATES.contactEn;
   const { data: c } = await db().from("wa_contacts").select("wa_id,last_inbound_at").eq("wa_id", waId).maybeSingle();
   if (!c) await db().from("wa_contacts").insert({ wa_id: waId });
-  const open = c?.last_inbound_at && Date.now() - new Date(c.last_inbound_at) < 23 * 3600 * 1000;
+  const open = Boolean(c?.last_inbound_at) && Date.now() - new Date(c.last_inbound_at) < 23 * 3600 * 1000;
+  // "approved": the owner himself ordered the quotation and named the bank details, so it goes out without waiting.
+  // Only the owner's channels (WhatsApp from his number, or his Setup) can set this.
+  const approved = Boolean(note) && Boolean(send_quote) && (bank === "sbm" || bank === "none");
+  if (note) {
+    const orders = (await getSetting("contact_orders", {})) || {};
+    orders[waId] = { note, at: new Date().toISOString(), by: by || "", approved, bank: approved ? bank : "" };
+    await setSetting("contact_orders", orders);
+  }
+  await logEvent("contact_client", { wa_id: waId, lang, note, by: by || "", send_quote: Boolean(send_quote), bank: bank || "", open });
+  const out = { wa_id: waId, pretty: prettyNumber(waId), lang, note: note || "", direct: approved, now: false, sent: false, held: "" };
+
+  if (approved && open) {
+    // The chat is already open (the client wrote in the last 23 hours): no first message, the quotation goes straight away.
+    const { draftReply, draftRow, hasContent } = require("./drafter");
+    const { autoSend } = require("./autosend");
+    out.now = true;
+    const { data: last } = await db().from("wa_messages").select("id").eq("wa_id", waId).order("sent_at", { ascending: false }).limit(1);
+    const draft = await draftReply(waId);
+    if (!hasContent(draft)) { out.held = "the bot could not prepare it; please check the chat"; return out; }
+    await db().from("wa_drafts").update({ status: "superseded", decided_at: new Date().toISOString() }).eq("wa_id", waId).eq("status", "pending");
+    const row = await insertDraft(draftRow(waId, last?.[0]?.id || null, draft));
+    const r = await autoSend(waId, row);
+    out.sent = Boolean(r?.sent);
+    out.held = r?.held || r?.error || "";
+    return out;
+  }
+
   let id = null;
   if (open) {
     id = await sendText(waId, t.body);
@@ -103,16 +130,7 @@ async function contactClient({ number, lang, note, by, send_quote, bank }) {
   }
   await storeOut(waId, id, open ? "text" : "template", t.body);
   await db().from("wa_contacts").update({ last_message_at: new Date().toISOString() }).eq("wa_id", waId);
-  if (note) {
-    const orders = (await getSetting("contact_orders", {})) || {};
-    // "approved": the owner himself ordered the quotation and named the bank details, so it goes out without waiting.
-    // Only the owner's channels (WhatsApp from his number, or his Setup) can set this.
-    const approved = Boolean(send_quote) && (bank === "sbm" || bank === "none");
-    orders[waId] = { note, at: new Date().toISOString(), by: by || "", approved, bank: approved ? bank : "" };
-    await setSetting("contact_orders", orders);
-  }
-  await logEvent("contact_client", { wa_id: waId, lang, note, by: by || "", send_quote: Boolean(send_quote), bank: bank || "" });
-  return { wa_id: waId, pretty: prettyNumber(waId), lang, note: note || "", direct: Boolean(note) && Boolean(send_quote) && (bank === "sbm" || bank === "none") };
+  return out;
 }
 
 // ---- The owner's WhatsApp messages (typed or voice) ----
@@ -125,9 +143,18 @@ async function reply(waId, text) {
   await storeOut(waId, id, "text", text);
 }
 
+function doneMessage(r) {
+  if (r.now) {
+    return r.sent
+      ? `✅ Done: the quotation was sent to ${prettyNumber(r.wa_id)} straight away (the chat was already open, so no first message).`
+      : `⚠️ ${prettyNumber(r.wa_id)}'s chat is open, so I prepared the quotation, but it was not sent: ${r.held || "it is waiting for approval"}. It's in the Suite.`;
+  }
+  return `✅ Done: ${prettyNumber(r.wa_id)} has our first message${r.lang === "fr" ? " (French)" : ""}.${r.note ? ` I'll prepare "${r.note}" when they reply${r.direct ? ", and send the quotation straight away." : "; quotations wait for your approval."}` : ""}`;
+}
+
 function describe(cmd) {
   const direct = cmd.send_quote && (cmd.bank === "sbm" || cmd.bank === "none");
-  return `contact ${prettyNumber(cmd.number)} in ${cmd.lang === "fr" ? "French" : "English"}${cmd.note ? `, then prepare: ${cmd.note}` : ""}${direct ? `, and send the quotation (${cmd.bank === "sbm" ? "SBM bank details" : "no bank details"}) as soon as they reply, without waiting for approval` : ""}`;
+  return `contact ${prettyNumber(cmd.number)} in ${cmd.lang === "fr" ? "French" : "English"}${cmd.note ? `, then prepare: ${cmd.note}` : ""}${direct ? `, and send the quotation (${cmd.bank === "sbm" ? "SBM bank details" : "no bank details"}) without waiting for approval: straight away if they wrote in the last 23 hours, otherwise as soon as they reply` : ""}`;
 }
 
 async function handleOwnerMessage(waId, m) {
@@ -139,14 +166,14 @@ async function handleOwnerMessage(waId, m) {
       if (fresh && YES.test(text)) {
         await setSetting("owner_pending", null);
         const r = await contactClient({ ...pending.cmd, by: "owner (WhatsApp)" });
-        return reply(waId, `✅ Done: ${prettyNumber(r.wa_id)} has our first message${r.lang === "fr" ? " (French)" : ""}.${r.note ? ` I'll prepare "${r.note}" when they reply${r.direct ? ", and send the quotation straight away." : "; quotations wait for your approval."}` : ""}`);
+        return reply(waId, doneMessage(r));
       }
       if (fresh && NO.test(text)) { await setSetting("owner_pending", null); return reply(waId, "Cancelled."); }
       if (!GATE.test(text)) return null;
       const cmd = await parseCommand(text);
       if (cmd.action !== "contact") return cmd.problem === "number" ? reply(waId, "I couldn't read the number. Please check it and send the command again.") : null;
       const r = await contactClient({ ...cmd, by: "owner (WhatsApp)" });
-      return reply(waId, `✅ Done: ${prettyNumber(r.wa_id)} has our first message${r.lang === "fr" ? " (French)" : ""}.${r.note ? ` I'll prepare "${r.note}" when they reply${r.direct ? ", and send the quotation straight away." : "; quotations wait for your approval."}` : ""}`);
+      return reply(waId, doneMessage(r));
     }
     if (m.type === "audio" && m.mediaId) {
       let heard = "";
@@ -161,7 +188,7 @@ async function handleOwnerMessage(waId, m) {
       if (fresh && YES.test(heard)) { // "yes" can be spoken too
         await setSetting("owner_pending", null);
         const r = await contactClient({ ...pending.cmd, by: "owner (voice)" });
-        return reply(waId, `✅ Done: ${prettyNumber(r.wa_id)} has our first message.`);
+        return reply(waId, doneMessage(r));
       }
       const cmd = await parseCommand(heard);
       if (cmd.action !== "contact") return reply(waId, `🎙️ I heard: "${heard.slice(0, 400)}"\nI didn't find a command in it. Try: "contact 5762 9412".`);
