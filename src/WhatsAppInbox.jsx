@@ -540,7 +540,7 @@ export default function WhatsAppInbox(){
                   );
                 })()}
                 <div style={{fontSize:10,color:MID_GREY,textAlign:"right",marginTop:3}}>
-                  {[sourceLabel(m),when(m.sent_at),m.status==="failed"?"⚠️ not delivered":"",m.status==="no_whatsapp"?"⚠️ not on WhatsApp":"",m.status==="resent"?"↻ resent":""].filter(Boolean).join(" · ")}
+                  {[sourceLabel(m),when(m.sent_at),m.direction==="out"&&m.status==="sent"?"✓ sent":"",m.direction==="out"&&m.status==="delivered"?"✓✓ delivered":"",m.direction==="out"&&m.status==="read"?"✓✓ read":"",m.status==="failed"?"⚠️ not delivered":"",m.status==="no_whatsapp"?"⚠️ not on WhatsApp":"",m.status==="resent"?"↻ resent":""].filter(Boolean).join(" · ")}
                 </div>
                 {m.direction==="out"&&(m.status==="no_whatsapp"||(m.status==="failed"&&m.type==="template"))&&m.body&&(
                   <a href={`sms:+${selected}?body=${encodeURIComponent(m.body)}`}
