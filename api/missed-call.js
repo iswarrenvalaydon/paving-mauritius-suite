@@ -15,6 +15,7 @@ function waIdOf(raw) {
   return d.length >= 10 && d.length <= 15 ? d : "";
 }
 
+const MESSAGE_GAP_MS = 12 * 3600 * 1000;
 const MISSED_TEXT = "Hello, this is Paving Mauritius Ltd. Sorry we missed your call! How can we help you? You can reply here on WhatsApp.";
 
 async function handleMissedCall({ number, kind, name }) {
@@ -44,6 +45,11 @@ async function handleMissedCall({ number, kind, name }) {
   }, { onConflict: "id", ignoreDuplicates: true });
   await db().from("wa_contacts").update({ last_message_at: now.toISOString(), unread: (contact?.unread || 0) + 1 }).eq("wa_id", waId);
 
+  // A client who calls several times is not messaged each time: once we have written to them in the last 12 hours, that is enough.
+  const { data: sentRecently } = await db().from("wa_messages").select("id").eq("wa_id", waId).eq("direction", "out")
+    .gte("sent_at", new Date(now.getTime() - MESSAGE_GAP_MS).toISOString()).limit(1);
+  if (sentRecently && sentRecently.length) return { ok: true, wa_id: waId, skipped: "already messaged in the last 12 hours" };
+
   // One suggestion per caller: if one is already waiting, leave it.
   const { data: pending } = await db().from("wa_drafts").select("id").eq("wa_id", waId).eq("status", "pending").limit(1);
   if (pending && pending.length) return { ok: true, wa_id: waId, draft: "already waiting" };
@@ -55,12 +61,26 @@ async function handleMissedCall({ number, kind, name }) {
     quote: { template: "missed_call" },
   }).select().single();
 
+  // Two reports of the same call can arrive at the same moment and both get past the checks above:
+  // only the earliest waiting suggestion goes on, the other is dropped.
+  if (draft) {
+    const { data: earlier } = await db().from("wa_drafts").select("id").eq("wa_id", waId).eq("status", "pending").lt("id", draft.id).limit(1);
+    if (earlier && earlier.length) {
+      await db().from("wa_drafts").delete().eq("id", draft.id);
+      return { ok: true, wa_id: waId, draft: "already waiting" };
+    }
+  }
+
   // With automatic sending on, the message goes out by itself (not at night: it waits for the morning team).
   const { autoSettings, mauritiusHour } = require("./_lib/autosend");
   const cfg = await autoSettings();
   const h = mauritiusHour(now);
   if (cfg.enabled && draft && h >= 7 && h < 23) {
     try {
+      // The other report of the same call may have been sent a moment ago.
+      const { data: justSent } = await db().from("wa_messages").select("id").eq("wa_id", waId).eq("direction", "out")
+        .gte("sent_at", new Date(Date.now() - MESSAGE_GAP_MS).toISOString()).limit(1);
+      if (justSent && justSent.length) { await db().from("wa_drafts").delete().eq("id", draft.id); return { ok: true, wa_id: waId, skipped: "already messaged" }; }
       await require("./wa-admin").internals.send(waId, MISSED_TEXT, draft.id);
       await logEvent("auto_sent", { wa_id: waId, draft_id: draft.id, missed_call: true });
       return { ok: true, wa_id: waId, sent: true };
