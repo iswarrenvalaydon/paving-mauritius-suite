@@ -110,6 +110,7 @@ ${referralText(ravin)}${examplesText(examples)}
 Reply with ONLY a JSON object, no other text:
 {"messages": ["<short message>", "<short message>"], "reply_to": [<client message number this message answers, e.g. 3, or null>, ...], "needs_team": true|false, "team_note": "<short note or empty>", "attach": null | "price_list", "photos": [<album names to send, or empty>], "photo_mode": "album" | "designs", "photos_after": "<message sent after the photos, or empty>",
  "products": [] | [{"text": "<short description of ONE product>", "photos": [<its album name(s)>]}],
+ "photo_product": "<name of OUR product you recognised in the client's photo, e.g. Evergreen 400x400x120mm, or empty>",
  "referral": null | {"client_name": "", "location": "", "product": "", "area": ""},
  "payment": null | {"amount": 25000, "date": "", "bank": "", "reference": ""},
  "quotes": [] | [{"client_name": "", "location": "<street address>", "city": "", "brn": "", "vat_no": "", "email": "", "summary": "", "caption": "Here is your quotation.", "items": [{"desc": "Slabs 600x300x60mm – Light Grey", "qty": 0, "area_m2": 20, "gap_cm": 5, "unit_price_incl_vat": 145}]}]}`;
@@ -197,7 +198,7 @@ function parseJson(text) {
   try { return JSON.parse(text.slice(start, end + 1)); } catch { return null; }
 }
 
-async function draftReply(waId) {
+async function draftReply(waId, opts = {}) {
   const key = process.env.ANTHROPIC_API_KEY;
   if (!key) throw new Error("ANTHROPIC_API_KEY is not set in Vercel");
 
@@ -224,6 +225,7 @@ async function draftReply(waId) {
   const refs = await referencePhotos(messages);
   const content = [
     { type: "text", text: `Conversation so far (oldest first):\n${transcript(messages, labels)}` },
+    ...(opts.productCorrection ? [{ type: "text", text: `Our team has checked the client's photo: the product in it is "${String(opts.productCorrection).slice(0, 120)}". Use exactly that product (it overrides what you recognised yourself), set "photo_product" to it, and answer the client's question about it, using the measurements and details the client gave in ANY of their messages. Set needs_team only if something else needs a person.` }] : []),
     ...(order && order.note ? [{ type: "text", text: `Our Sales Manager contacted this client first and asked you to take care of this: "${order.note}". Do it with the client's reply.${order.approved ? " He has already approved this quotation himself, and his command is the NEWEST and final instruction: it overrides everything earlier in this chat (what the client said or asked before, earlier quotations, earlier suggestions and team notes). Do not compare it with earlier quotations and do not ask the team to check that it matches. Prepare the quotation he described now (whatever the client last wrote), using exactly his product, size and area, with one short covering sentence, and do not ask for details he already gave. If anything he said is unclear or missing (product, colour or area), do not guess: ask the team instead." : " Any quotation waits for the team's approval as usual."}` }] : []),
     ...(ad ? [{ type: "text", text: adPrompt(ad, adInfo) }] : []),
     { type: "text", text: photoPrompt(albumList) },
@@ -295,6 +297,7 @@ async function draftReply(waId) {
     photos_after: byProduct ? "" : String(parsed.photos_after || "").trim().slice(0, 300),
     referral: cleanReferral(parsed.referral),
     payment: cleanPayment(parsed.payment),
+    photo_product: String(opts.productCorrection || parsed.photo_product || "").trim().slice(0, 120),
   };
 }
 
@@ -345,6 +348,7 @@ function photoPrompt(list) {
   return `Photo albums we can send (exact names): ${list.map((a) => `"${a.album}"`).join(", ")}.
 Send photos whenever the client asks for photos or pictures, OR asks what our pavers, slabs, cobbles or a colour look like ("what are your slabs like?", "ki zot slab ressemble?", "c'est comment vos pavés?"): showing beats describing. For one product: put its album name(s) in "photos" (at most 2; Light Grey if they named no colour), "photo_mode": "album", and one short line before, e.g. "Here are some photos of our 600x300 slabs in Light Grey.". The photos go out after your messages.
 When the client asks about designs or patterns, or wants slabs/pavers "as per design" / "with a design" without choosing one: "photo_mode": "designs", put 3 or 4 DIFFERENT design albums in "photos" (one photo of each is sent, labelled with its name), a short line before such as "Here are some of our designs:", and "photos_after": "Which one do you like?" (in the client's language).
+When the client sent a photo (or a screenshot of our ad) and you recognise it as one of OUR products, put its exact name in "photo_product" (e.g. "Evergreen 400x400x120mm"); otherwise leave it empty.
 Several products at once: when the client asks about our bricks/pavers, slabs, Evergreen, kerbs or cobbles in general, or about several of them ("what do you have?", "ki zot ena?", "what products do you sell?"), give ALL the products we sell that fit what they asked (e.g. all five for a general question), in "products": ONE entry per product, in this order: pavers, cobbles, slabs, Evergreen, kerbs. Each entry's "text" is its own short message: the product, its sizes and its Light Grey price (VAT included) from the rulebook, in one or two lines (Kerbs 450x200x125mm: Rs 150 per piece, Light Grey; Evergreen 400x400x120mm: Rs 120 per piece), and "photos" are that product's own album name(s) (at most 2; empty if we have no album for it, never borrow another product's photos). Each entry is sent as its own WhatsApp message, followed by its photos. Do NOT ask which product they want, which colour or size they prefer, or any preference question, and do not add a closing question; the client will tell us. When you use "products", leave "messages" empty, "photos" empty and "photos_after" empty. Describing kerbs and Evergreen in this overview does NOT need the team (don't set needs_team for it); only a quotation for kerbs does. If the client asked about just one product, use the normal "photos" way described above.
 Don't send photos the client didn't ask for and that don't answer their question. If no album matches, say "I'll send you some photos." and set needs_team.`;
 }
@@ -362,6 +366,7 @@ function draftRow(waId, replyTo, draft) {
   if (draft.referral) extras.referral = draft.referral;
   if (draft.payment) extras.payment = draft.payment;
   if (draft.ask_ad) extras.ask_ad = true;
+  if (draft.photo_product) extras.photo_product = draft.photo_product;
   return {
     wa_id: waId, reply_to: replyTo || null, body: draft.reply || "", needs_team: draft.needs_team,
     team_note: draft.team_note || null, ...(Object.keys(extras).length ? { quote: extras } : {}),

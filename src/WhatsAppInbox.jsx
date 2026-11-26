@@ -69,6 +69,7 @@ export default function WhatsAppInbox(){
   const [oldCalls,setOldCalls]=useState(null); // unanswered missed calls waiting to be messaged
   const [pastRefs,setPastRefs]=useState(null); // clients given Ravin's number without Ravin being told
   const [manualText,setManualText]=useState("");
+  const [fixProduct,setFixProduct]=useState("");
   const [busy,setBusy]=useState(false);
   const [error,setError]=useState("");
   const [info,setInfo]=useState("");
@@ -685,9 +686,20 @@ export default function WhatsAppInbox(){
                     📨 Ravin will also get a message: {[draft.quote.referral.client_name||displayName(chat.contact),draft.quote.referral.location,draft.quote.referral.product,draft.quote.referral.area].filter(Boolean).join(" · ")}
                   </div>
                 )}
+                {draft.quote&&draft.quote.photo_product&&(
+                  <div style={{background:"#fff",border:`1px solid ${BLUE}`,borderRadius:8,padding:8,marginBottom:8}}>
+                    <div style={{fontSize:13,color:BLUE,marginBottom:6}}>📷 The bot recognised the client's photo as: <b>{draft.quote.photo_product}</b></div>
+                    <div style={{display:"flex",gap:6}}>
+                      <input value={fixProduct} onChange={e=>setFixProduct(e.target.value)} placeholder="Not right? Write the correct product, e.g. Kerb 450x200x125mm"
+                        style={{flex:1,minWidth:0,padding:8,fontSize:13,borderRadius:8,border:"1px solid #ccc",fontFamily:"inherit"}}/>
+                      <button disabled={busy||!fixProduct.trim()} onClick={async()=>{ const r=await act("correct_photo",{wa_id:selected,value:fixProduct.trim()},"✅ Corrected: check the new suggestion, then Go ahead"); if(r){ setFixProduct(""); await loadChat(selected); loadChats(); } }}
+                        style={btn(BLUE,"#fff",{padding:"6px 10px",fontSize:13})}>✏️ Correct</button>
+                    </div>
+                  </div>
+                )}
                 <div style={{display:"flex",gap:8,flexWrap:"wrap",marginTop:4}}>
                   <button onClick={()=>sendMessage(draftText,draft.id)} disabled={busy} style={btn(GREEN,"#fff")}>
-                    {busy?"…":splitParts(draftText).filter(t=>quoteOf(t).text.trim()).length>1?`✅ Send ${splitParts(draftText).filter(t=>quoteOf(t).text.trim()).length} messages`:"✅ Send"}
+                    {busy?"…":draft.quote&&draft.quote.photo_product?"✅ Go ahead":splitParts(draftText).filter(t=>quoteOf(t).text.trim()).length>1?`✅ Send ${splitParts(draftText).filter(t=>quoteOf(t).text.trim()).length} messages`:"✅ Send"}
                   </button>
                   <button onClick={()=>setDraftText(draftText+BREAK)} disabled={busy} style={btn("#fff",GREEN,{border:`1px solid ${GREEN}`,padding:"8px 12px",fontSize:13})}>+ Message</button>
                 </div>

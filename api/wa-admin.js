@@ -343,8 +343,8 @@ async function autoQuote(waId, draftId, q, index, bank, followup) {
   return { ...r, ref };
 }
 
-async function redraft(waId) {
-  const draft = await draftReply(waId);
+async function redraft(waId, opts = {}) {
+  const draft = await draftReply(waId, opts);
   if (!draft) throw new Error("No messages in this chat yet");
   await db().from("wa_drafts").update({ status: "superseded", decided_at: new Date().toISOString() }).eq("wa_id", waId).eq("status", "pending");
   const { data: last } = await db().from("wa_messages").select("id").eq("wa_id", waId).eq("direction", "in").order("sent_at", { ascending: false }).limit(1);
@@ -659,6 +659,11 @@ module.exports = async function handler(req, res) {
         await db().from("wa_drafts").update({ status: "discarded", decided_at: new Date().toISOString() }).eq("id", draftId);
         return res.json({ ok: true });
       case "redraft": return res.json({ draft: await redraft(waId) });
+      case "correct_photo": {
+        const product = String(value || "").replace(/\s+/g, " ").trim().slice(0, 120);
+        if (!product) return res.status(400).json({ error: "Write which product it is." });
+        return res.json({ draft: await redraft(waId, { productCorrection: product }) });
+      }
       case "describe_ad": {
         const ad = await describeAd(String(req.body.key || ""), value, { label: req.body.label, url: req.body.url });
         let draft = null;
