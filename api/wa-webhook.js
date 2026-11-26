@@ -18,6 +18,15 @@ const digits = (s) => String(s || "").replace(/\D/g, "");
 const sleep = (ms) => new Promise((r) => setTimeout(r, ms));
 const isoFromTs = (ts) => new Date((Number(ts) || Date.now() / 1000) * 1000).toISOString();
 
+// A client (or the team, from the phone) edited a message: WhatsApp sends an "edit" event holding the new content.
+// Treat it as a normal message of the inner type, and remember which message it replaces.
+function unwrapEdit(m) {
+  if (!m || m.type !== "edit") return m;
+  const inner = m.edit?.message;
+  if (!inner || typeof inner !== "object") return m;
+  return { ...inner, id: m.id, from: m.from, to: m.to, timestamp: m.timestamp, type: inner.type || "text", _edit_of: m.edit?.original_message_id || null };
+}
+
 function bodyOf(m) {
   if (!m) return "";
   const cap = (x) => (x?.caption ? ` ${x.caption}` : "");
@@ -166,7 +175,7 @@ async function handle(body) {
 
     if (field === "messages") {
       const names = new Map((value.contacts || []).map((c) => [digits(c.wa_id), c.profile?.name || null]));
-      const msgs = value.messages || [];
+      const msgs = (value.messages || []).map(unwrapEdit);
       if (msgs.length) {
         await ensureContacts(msgs.map((m) => {
           const id = digits(m.from);
@@ -178,6 +187,7 @@ async function handle(body) {
           id: m.id, wa_id: digits(m.from), direction: "in", source: "client", type: m.type,
           body: adOf(m) + bodyOf(m), media_id: mediaIdOf(m), sent_at: isoFromTs(m.timestamp),
         })));
+        for (const m of msgs) if (m._edit_of) await db().from("wa_messages").delete().eq("id", m._edit_of).eq("wa_id", digits(m.from)); // the edited text replaces the original
         for (const m of msgs) if (m.type === "unsupported") await logEvent("unsupported", { wa_id: digits(m.from), message: m });
         for (const m of msgs) if (m.referral) {
           await logEvent("ad_referral", { wa_id: digits(m.from), message_id: m.id, referral: m.referral });
@@ -209,13 +219,14 @@ async function handle(body) {
       }
     } else if (field === "smb_message_echoes") {
       // Replies typed on the business phone or JL's linked devices.
-      const echoes = value.message_echoes || [];
+      const echoes = (value.message_echoes || []).map(unwrapEdit);
       if (echoes.length) {
         await ensureContacts(echoes.map((m) => ({ wa_id: digits(m.to) })));
         await insertMessages(echoes.map((m) => ({
           id: m.id, wa_id: digits(m.to), direction: "out", source: "phone", type: m.type,
           body: bodyOf(m), media_id: mediaIdOf(m), sent_at: isoFromTs(m.timestamp),
         })));
+        for (const m of echoes) if (m._edit_of) await db().from("wa_messages").delete().eq("id", m._edit_of).eq("wa_id", digits(m.to));
         const ids = echoes.map((m) => digits(m.to));
         // Ravin's number given from the phone: Ravin is told after the reply to WhatsApp.
         for (const m of echoes) if (m.type === "text" && await mentionsRavin(m.text?.body)) referLater.push(digits(m.to));
