@@ -221,7 +221,7 @@ async function send(waId, body, draftId, photosWanted) {
   const attach = draft?.quote?.attach || null;
   // The team can untick albums the bot suggested; without a list from the Suite, the bot's choice stands.
   const designs = draft?.quote?.photo_mode === "designs";
-  const photoAlbums = await knownAlbums(Array.isArray(photosWanted) ? photosWanted : draft?.quote?.photos || [], designs ? 4 : 2);
+  const photoAlbums = await knownAlbums(Array.isArray(photosWanted) ? photosWanted : draft?.quote?.photos || [], designs ? 4 : draft?.quote?.product_photos ? 8 : 2);
   const photosAfter = String(draft?.quote?.photos_after || "").trim();
   const suggested = draft ? { body: draft.body } : null; // keep the bot's original wording
   if (!parts.length && !attach && !photoAlbums.length) throw new Error("Message is empty");
@@ -245,6 +245,8 @@ async function send(waId, body, draftId, photosWanted) {
         return { ok: true, ids: [id] };
       }
     }
+    // Several products in one answer: each message is followed by its own photos (only when the team left the text's parts as they were).
+    const perProduct = Array.isArray(draft?.quote?.product_photos) && draft.quote.product_photos.length === parts.length ? draft.quote.product_photos : null;
     for (let i = 0; i < parts.length; i += 1) {
       if (i > 0) await sleep(6500); // WhatsApp allows about one message every 6 seconds to the same person
       const { quote, text } = splitReply(parts[i]);
@@ -252,6 +254,10 @@ async function send(waId, body, draftId, photosWanted) {
       const id = await sendText(waId, text, await replyTarget(waId, quote));
       await storeOut(waId, id, "text", text);
       ids.push(id);
+      if (perProduct) {
+        const mine = perProduct[i].filter((a) => photoAlbums.includes(a));
+        if (mine.length) ids.push(...(await sendAlbums(waId, mine, true, false)));
+      }
     }
     if (attach === "price_list") {
       if (parts.length) await sleep(6500);
@@ -263,7 +269,7 @@ async function send(waId, body, draftId, photosWanted) {
       await storeOut(waId, id, "document", "[Document Price list.pdf]");
       ids.push(id);
     }
-    if (photoAlbums.length) {
+    if (photoAlbums.length && !perProduct) {
       const sentPhotos = await sendAlbums(waId, photoAlbums, ids.length > 0, designs);
       ids.push(...sentPhotos);
       if (photosAfter && sentPhotos.length) {

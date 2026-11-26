@@ -8,7 +8,7 @@
       "maxDuration": 300
     },
     "api/wa-admin.js": {
-      "maxDuration": 60
+      "maxDuration": 300
     },
     "api/morning-catchup.js": {
       "maxDuration": 300

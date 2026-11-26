@@ -108,6 +108,7 @@ ${referralText(ravin)}${examplesText(examples)}
 
 Reply with ONLY a JSON object, no other text:
 {"messages": ["<short message>", "<short message>"], "reply_to": [<client message number this message answers, e.g. 3, or null>, ...], "needs_team": true|false, "team_note": "<short note or empty>", "attach": null | "price_list", "photos": [<album names to send, or empty>], "photo_mode": "album" | "designs", "photos_after": "<message sent after the photos, or empty>",
+ "products": [] | [{"text": "<short description of ONE product>", "photos": [<its album name(s)>]}],
  "referral": null | {"client_name": "", "location": "", "product": "", "area": ""},
  "payment": null | {"amount": 25000, "date": "", "bank": "", "reference": ""},
  "quotes": [] | [{"client_name": "", "location": "<street address>", "city": "", "brn": "", "vat_no": "", "email": "", "summary": "", "caption": "Here is your quotation.", "items": [{"desc": "Slabs 600x300x60mm – Light Grey", "qty": 0, "area_m2": 20, "gap_cm": 5, "unit_price_incl_vat": 145}]}]}`;
@@ -271,8 +272,17 @@ async function draftReply(waId) {
     })
     .filter(Boolean)
     .slice(0, 3);
+  // Several products asked at once: one message per product, each followed by its own photos.
+  const productRows = [];
+  for (const pr of (Array.isArray(parsed.products) ? parsed.products : []).slice(0, 5)) {
+    const text = String(pr?.text || "").replace(/\n-{3,}\n/g, "\n").trim();
+    if (!text) continue;
+    productRows.push({ text, photos: await knownAlbums(pr.photos, 2).catch(() => []) });
+  }
+  const byProduct = productRows.length >= 2;
   return {
-    reply: parts.join(MESSAGE_BREAK), // with a quote, these go out after the PDF
+    product_photos: byProduct ? productRows.map((r) => r.photos) : null,
+    reply: byProduct ? productRows.map((r) => r.text).join(MESSAGE_BREAK) : parts.join(MESSAGE_BREAK), // with a quote, these go out after the PDF
     needs_team: Boolean(parsed.needs_team) || (adUnknown && !ordered),
     team_note: [adUnknown && !ordered ? "📢 New ad: tell the bot what's in it (box above), then it can quote." : "", String(parsed.team_note || "").trim()].filter(Boolean).join(" "),
     quote,
@@ -280,8 +290,8 @@ async function draftReply(waId) {
     attach: parsed.attach === "price_list" ? "price_list" : null,
     // "designs": one photo of each of several designs, then a question such as "Which one do you like?".
     photo_mode: parsed.photo_mode === "designs" ? "designs" : "album",
-    photos: await knownAlbums(parsed.photos, parsed.photo_mode === "designs" ? 4 : 2).catch(() => []),
-    photos_after: String(parsed.photos_after || "").trim().slice(0, 300),
+    photos: byProduct ? [...new Set(productRows.flatMap((r) => r.photos))] : await knownAlbums(parsed.photos, parsed.photo_mode === "designs" ? 4 : 2).catch(() => []),
+    photos_after: byProduct ? "" : String(parsed.photos_after || "").trim().slice(0, 300),
     referral: cleanReferral(parsed.referral),
     payment: cleanPayment(parsed.payment),
   };
@@ -334,6 +344,7 @@ function photoPrompt(list) {
   return `Photo albums we can send (exact names): ${list.map((a) => `"${a.album}"`).join(", ")}.
 Send photos whenever the client asks for photos or pictures, OR asks what our pavers, slabs, cobbles or a colour look like ("what are your slabs like?", "ki zot slab ressemble?", "c'est comment vos pavés?"): showing beats describing. For one product: put its album name(s) in "photos" (at most 2; Light Grey if they named no colour), "photo_mode": "album", and one short line before, e.g. "Here are some photos of our 600x300 slabs in Light Grey.". The photos go out after your messages.
 When the client asks about designs or patterns, or wants slabs/pavers "as per design" / "with a design" without choosing one: "photo_mode": "designs", put 3 or 4 DIFFERENT design albums in "photos" (one photo of each is sent, labelled with its name), a short line before such as "Here are some of our designs:", and "photos_after": "Which one do you like?" (in the client's language).
+Several products at once: when the client asks about our bricks/pavers, slabs, Evergreen, kerbs or cobbles in general, or about several of them ("what do you have?", "ki zot ena?", "what products do you sell?"), give ALL the products we sell that fit what they asked (e.g. all five for a general question), in "products": ONE entry per product, in this order: pavers, cobbles, slabs, Evergreen, kerbs. Each entry's "text" is its own short message: the product, its sizes and its Light Grey price (VAT included) from the rulebook, in one or two lines (Kerbs 450x200x125mm: Rs 150 per piece, Light Grey; Evergreen 400x400x120mm: Rs 120 per piece), and "photos" are that product's own album name(s) (at most 2; empty if we have no album for it, never borrow another product's photos). Each entry is sent as its own WhatsApp message, followed by its photos. Do NOT ask which product they want, which colour or size they prefer, or any preference question, and do not add a closing question; the client will tell us. When you use "products", leave "messages" empty, "photos" empty and "photos_after" empty. Describing kerbs and Evergreen in this overview does NOT need the team (don't set needs_team for it); only a quotation for kerbs does. If the client asked about just one product, use the normal "photos" way described above.
 Don't send photos the client didn't ask for and that don't answer their question. If no album matches, say "I'll send you some photos." and set needs_team.`;
 }
 
@@ -344,6 +355,7 @@ function draftRow(waId, replyTo, draft) {
   if (draft.photos && draft.photos.length) {
     extras.photos = draft.photos;
     if (draft.photo_mode === "designs") extras.photo_mode = "designs";
+    if (draft.product_photos) extras.product_photos = draft.product_photos;
     if (draft.photos_after) extras.photos_after = draft.photos_after;
   }
   if (draft.referral) extras.referral = draft.referral;
